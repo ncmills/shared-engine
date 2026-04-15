@@ -386,6 +386,24 @@ const MOH_PRIORS: BrandFieldPriors = {
   },
 };
 
+/**
+ * Runtime overlay registry. Consumers (sites) call `registerPriorOverlay`
+ * to inject JSON-sourced popularity data built by `scripts/build-priors.ts`.
+ * Only fields with sufficient sample count (enforced by the builder script)
+ * land here; everything else falls back to static defaults above.
+ */
+const PRIOR_OVERLAYS: Record<BrandId, Partial<BrandFieldPriors>> = {
+  bestman: {},
+  moh: {},
+};
+
+export function registerPriorOverlay(brand: BrandId, overlay: Partial<BrandFieldPriors>): void {
+  PRIOR_OVERLAYS[brand] = { ...overlay };
+}
+
 export function priorsForBrand(brand: BrandId): BrandFieldPriors {
-  return brand === 'bestman' ? BESTMAN_PRIORS : MOH_PRIORS;
+  const base = brand === 'bestman' ? BESTMAN_PRIORS : MOH_PRIORS;
+  const overlay = PRIOR_OVERLAYS[brand];
+  if (!overlay || Object.keys(overlay).length === 0) return base;
+  return { ...base, ...overlay } as BrandFieldPriors;
 }
