@@ -1,0 +1,158 @@
+import type { PriceTargets, PricingDestination } from './types.js';
+
+export const BUDGET_CAPS_PER_PERSON: Record<string, number> = {
+  'under-500': 500,
+  '500-1000': 1000,
+  '1000-1500': 1500,
+  '1500-2000': 2000,
+  '2000-plus': 4000,
+  'no-limit': 999999,
+};
+
+export const UNLIMITED_BUDGET_IDS = new Set<string>(['no-limit']);
+
+const NIGHTLIFE_PRICE_MAP: Record<string, number> = {
+  $: 40,
+  $$: 80,
+  $$$: 150,
+  $$$$: 250,
+};
+
+const DINING_PRICE_MAP: Record<string, number> = {
+  $: 30,
+  $$: 55,
+  $$$: 90,
+  $$$$: 140,
+};
+
+export function computePriceTargets(
+  destination: PricingDestination,
+  groupSize: number,
+  numberOfDays: number,
+  userBudget?: string
+): PriceTargets {
+  const nights = numberOfDays + 1;
+  const gs = Math.max(groupSize, 2);
+  const bigNights = Math.min(2, numberOfDays - 1);
+
+  const lodgingByPrice = [...destination.lodging].sort(
+    (a, b) =>
+      (a.pricePerNight[0] + a.pricePerNight[1]) / 2 -
+      (b.pricePerNight[0] + b.pricePerNight[1]) / 2
+  );
+  const cheapLodging = lodgingByPrice[0]!;
+  const expLodging = lodgingByPrice[lodgingByPrice.length - 1]!;
+  const midLodging = lodgingByPrice[Math.floor(lodgingByPrice.length / 2)]!;
+
+  const lodgingPP = (l: typeof cheapLodging, useHigh: boolean) => {
+    const rate = useHigh ? l.pricePerNight[1] : l.pricePerNight[0];
+    return l.perRoom
+      ? (rate * nights * Math.ceil(gs / 2)) / gs
+      : (rate * nights) / gs;
+  };
+
+  const budgetLodgingPP = lodgingPP(cheapLodging, false);
+  const midLodgingPP = lodgingPP(midLodging, false);
+  const premLodgingPP = lodgingPP(expLodging, true);
+
+  const venuesByPrice = [...destination.nightlife].sort(
+    (a, b) =>
+      (NIGHTLIFE_PRICE_MAP[a.priceRange] ?? 80) -
+      (NIGHTLIFE_PRICE_MAP[b.priceRange] ?? 80)
+  );
+  const cheapVenues = venuesByPrice.slice(0, Math.max(3, Math.ceil(venuesByPrice.length / 3)));
+  const expVenues = venuesByPrice.slice(-Math.max(3, Math.ceil(venuesByPrice.length / 3)));
+
+  const budgetNightlife =
+    (cheapVenues.reduce((s, v) => s + (NIGHTLIFE_PRICE_MAP[v.priceRange] ?? 40), 0) /
+      Math.max(cheapVenues.length, 1)) *
+    bigNights;
+  const midNightlife =
+    (venuesByPrice.reduce((s, v) => s + (NIGHTLIFE_PRICE_MAP[v.priceRange] ?? 80), 0) /
+      Math.max(venuesByPrice.length, 1)) *
+    bigNights;
+  const premNightlife =
+    (expVenues.reduce((s, v) => s + (NIGHTLIFE_PRICE_MAP[v.priceRange] ?? 150), 0) /
+      Math.max(expVenues.length, 1)) *
+    bigNights;
+
+  const diningSpots = destination.dining;
+  const cheapDining = diningSpots.filter(
+    (d) => d.priceRange === '$' || d.priceRange === '$$'
+  );
+  const upscaleDining = diningSpots.filter(
+    (d) => d.priceRange === '$$$' || d.priceRange === '$$$$'
+  );
+  const avgDining = (pool: readonly typeof diningSpots[number][]) =>
+    pool.length > 0
+      ? pool.reduce((s, d) => s + (DINING_PRICE_MAP[d.priceRange] ?? 60), 0) / pool.length
+      : 60;
+  const budgetFood =
+    Math.round(avgDining(cheapDining.length > 0 ? cheapDining : diningSpots) * 2) * numberOfDays;
+  const midFood = Math.round(avgDining(diningSpots) * 2) * numberOfDays;
+  const premFood =
+    Math.round(avgDining(upscaleDining.length > 0 ? upscaleDining : diningSpots) * 2) * numberOfDays;
+
+  const activities = destination.activities;
+  const budgetActivity =
+    activities.length > 0
+      ? activities.reduce((s, a) => s + a.pricePerPerson[0], 0) / activities.length
+      : 50;
+  const premActivity =
+    activities.length > 0
+      ? activities.reduce((s, a) => s + a.pricePerPerson[1], 0) / activities.length
+      : 150;
+  const midActivity = (budgetActivity + premActivity) / 2;
+
+  const budgetTransport = 40 * numberOfDays;
+  let midTransport = 80 * numberOfDays;
+  let premTransport = 150 * numberOfDays;
+  const partyBus = destination.transport.find((t) => t.type === 'party-bus');
+  if (partyBus && gs >= 8) {
+    const prices = (partyBus.priceRange.match(/\$[\d,]+/g) ?? []).map((s) =>
+      parseInt(s.replace(/[$,]/g, ''), 10)
+    );
+    const isBlockRate = /for \d+ hours/i.test(partyBus.priceRange);
+    const costPerNight =
+      isBlockRate && prices.length >= 1
+        ? prices[0]!
+        : prices.length >= 1
+        ? prices[0]! * 5
+        : 1000;
+    midTransport =
+      Math.round((costPerNight * bigNights) / gs) + 40 * Math.max(numberOfDays - bigNights, 0);
+    premTransport = Math.round((costPerNight * numberOfDays) / gs);
+  }
+
+  const budgetTotal = Math.round(
+    budgetLodgingPP + budgetFood + budgetNightlife + budgetActivity + budgetTransport
+  );
+  const midTotal = Math.round(
+    midLodgingPP + midFood + midNightlife + midActivity + midTransport
+  );
+  const premTotal = Math.round(
+    premLodgingPP + premFood + premNightlife + premActivity + premTransport
+  );
+
+  const adjustedMid = Math.max(midTotal, Math.round(budgetTotal * 1.2));
+  const adjustedPrem = Math.max(premTotal, Math.round(adjustedMid * 1.3));
+
+  const maxBudget = userBudget ? BUDGET_CAPS_PER_PERSON[userBudget] ?? 999999 : 999999;
+
+  let finalBudget = budgetTotal;
+  let finalMid = adjustedMid;
+  let finalPrem = adjustedPrem;
+
+  if (maxBudget < 999999) {
+    finalBudget = Math.min(budgetTotal, Math.round(maxBudget * 0.6));
+    finalMid = Math.min(adjustedMid, Math.round(maxBudget * 0.85));
+    finalPrem = Math.min(adjustedPrem, maxBudget);
+  }
+
+  const fmt = (n: number) => `$${Math.round(n / 50) * 50}`;
+  return {
+    weekendWarrior: `${fmt(finalBudget * 0.9)}–${fmt(finalBudget * 1.1)}`,
+    theLegend: `${fmt(finalMid * 0.9)}–${fmt(finalMid * 1.1)}`,
+    theKing: `${fmt(finalPrem * 0.9)}–${fmt(finalPrem * 1.1)}`,
+  };
+}
