@@ -1,4 +1,4 @@
-import type { PriceTargets, PricingDestination } from './types.js';
+import type { PriceTargets, PricingDestination } from './types';
 
 export const BUDGET_CAPS_PER_PERSON: Record<string, number> = {
   'under-500': 500,

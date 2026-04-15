@@ -1,9 +1,9 @@
-import type { BrandId } from './types.js';
+import type { BrandId } from './types';
 import {
   priorsForBrand,
   type FieldPrior,
   type WeightedChoice,
-} from './priors.js';
+} from './priors';
 
 export interface SurpriseResult {
   value: unknown;

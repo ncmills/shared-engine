@@ -1,4 +1,4 @@
-import type { BrandId } from './types.js';
+import type { BrandId } from './types';
 
 export interface BrandConfig {
   brandId: BrandId;

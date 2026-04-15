@@ -1,4 +1,4 @@
-import type { BrandEventProps } from './types.js';
+import type { BrandEventProps } from './types';
 
 export const CANONICAL_EVENTS = {
   PLAN_STARTED: 'plan_started',

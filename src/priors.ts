@@ -1,4 +1,4 @@
-import type { BrandId } from './types.js';
+import type { BrandId } from './types';
 
 /**
  * Tier-2 fallback priors — "what most crews / ladies pick" for each field,
