@@ -29,6 +29,26 @@ export type SignalTable =
 
 export type Brand = "moh" | "bestman" | "tdf";
 
+/**
+ * Map the public SignalTable name (client-facing, stable) to the physical
+ * wp_* Supabase table (renamed 2026-04-22 for wedding-planning tables).
+ *
+ * Keep the public API on the unprefixed names so nothing forces a client
+ * redeploy if the DB layout ever shifts again.
+ */
+export function resolveSignalTableName(table: SignalTable): string {
+  switch (table) {
+    case "plan_inputs":          return "wp_plan_inputs";
+    case "surprise_me_actions":  return "wp_surprise_me_actions";
+    case "plan_selections":      return "wp_plan_selections";
+    case "plan_bookmarks":       return "wp_plan_bookmarks";
+    case "offer_clicks":         return "wp_offer_clicks";
+    case "offer_conversions":    return "wp_offer_conversions";
+    case "trip_room_activity":   return "wp_trip_room_activity";
+    case "acquisition_log":      return "wp_acquisition_log";
+  }
+}
+
 export interface SignalPayload {
   brand: Brand;
   [key: string]: unknown;

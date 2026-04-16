@@ -118,16 +118,22 @@ export interface TripRoomState {
   note?: string;
 }
 
+/**
+ * Fields on `StoredPlan.inputs` the room handlers peek at. Left as an
+ * open type — callers hand their concrete WizardState and we only read
+ * these optional fields defensively.
+ */
+export interface RoomStoredPlanInputs {
+  organizerEmail?: string;
+  organizerName?: string;
+  bridePersonality?: string;
+  groomPersonality?: string;
+}
+
 /** StoredPlan subset the handlers rely on — both repos' StoredPlan satisfies this. */
 export interface RoomStoredPlan {
   id: string;
-  inputs?: {
-    organizerEmail?: string;
-    organizerName?: string;
-    bridePersonality?: string;
-    groomPersonality?: string;
-    [k: string]: unknown;
-  };
+  inputs?: RoomStoredPlanInputs;
   coOwners?: string[];
   voteSlots?: VoteSlot[];
   placeholders?: PlaceholderItem[];
@@ -144,10 +150,7 @@ export interface RoomStoredPlan {
   finalGuestCount?: number;
   homeAirport?: string;
   slug?: string;
-  destinations?: Record<string, {
-    city?: string;
-    state?: string;
-    plans?: Record<string, { tripName?: string }>;
-  }>;
-  [k: string]: unknown;
+  /** Destination tiers (budget/mid/premium). Typed defensively — handlers
+   *  only read `destinations?.<tier>?.plans?.<tierName>?.tripName`. */
+  destinations?: unknown;
 }

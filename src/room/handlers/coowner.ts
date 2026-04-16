@@ -78,10 +78,15 @@ export async function handleCoOwnerInvite(
       const honoreeField = ctx.honoreeFieldKey;
       const honoree =
         (plan.inputs?.[honoreeField] as string | undefined) || ctx.defaultHonoree;
+      const dests = plan.destinations as {
+        budget?: { plans?: { weekendWarrior?: { tripName?: string } } };
+        mid?: { plans?: { theLegend?: { tripName?: string } } };
+        premium?: { plans?: { theKing?: { tripName?: string } } };
+      } | undefined;
       const tripName =
-        plan.destinations?.mid?.plans?.theLegend?.tripName ||
-        plan.destinations?.budget?.plans?.weekendWarrior?.tripName ||
-        plan.destinations?.premium?.plans?.theKing?.tripName ||
+        dests?.mid?.plans?.theLegend?.tripName ||
+        dests?.budget?.plans?.weekendWarrior?.tripName ||
+        dests?.premium?.plans?.theKing?.tripName ||
         ctx.tripNameFallback(honoree);
       await ctx.email.sendCoOwnerInviteEmail({
         toEmail: normalizedEmail,
