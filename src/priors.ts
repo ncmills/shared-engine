@@ -223,16 +223,30 @@ const MOH_PRIORS: BrandFieldPriors = {
     ],
   },
   vibeTags: {
+    // Aligned 2026-04-16 with the 16 bachelorette archetypes in
+    // `maid-of-honor-hq/src/components/PartyWizardClient.tsx` (vibe tag grid).
+    // Previously these priors listed stale IDs (vegas-style, wine-country,
+    // beach-party, nashville-bach, spa-retreat) that no wizard button emitted,
+    // so Surprise Me suggested values that silently couldn't be selected.
     kind: 'multi-enum',
-    pickCount: [2, 4],
+    pickCount: [1, 3],
     choices: [
-      { value: 'boho-goddess', weight: 20 },
-      { value: 'coastal-grandmother', weight: 18 },
-      { value: 'vegas-style', weight: 18 },
-      { value: 'wine-country', weight: 15 },
-      { value: 'beach-party', weight: 12 },
-      { value: 'spa-retreat', weight: 10 },
-      { value: 'nashville-bach', weight: 7 },
+      { value: 'last-rodeo', weight: 14 },
+      { value: 'coastal-grandmother', weight: 12 },
+      { value: 'boho-goddess', weight: 10 },
+      { value: 'last-disco', weight: 10 },
+      { value: 'european-summer', weight: 9 },
+      { value: 'final-fiesta', weight: 8 },
+      { value: 'bridgerton', weight: 7 },
+      { value: 'barbiecore', weight: 7 },
+      { value: 'y2k-revival', weight: 5 },
+      { value: 'old-money', weight: 5 },
+      { value: 'cottagecore', weight: 4 },
+      { value: 'desert-mystic', weight: 4 },
+      { value: 'palm-springs-siren', weight: 3 },
+      { value: 'parisian-soiree', weight: 2 },
+      { value: 'bayou-baddie', weight: 1 },
+      { value: 'mountain-glow', weight: 1 },
     ],
   },
   venueQuality: {
