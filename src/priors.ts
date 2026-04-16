@@ -61,15 +61,8 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
       { value: 'lake-house', weight: 10 },
     ],
   },
-  venueQuality: {
-    kind: 'single-enum',
-    choices: [
-      { value: 'mid-range', weight: 55 },
-      { value: 'premium', weight: 25 },
-      { value: 'budget', weight: 15 },
-      { value: 'luxury', weight: 5 },
-    ],
-  },
+  // venueQuality was cut from the wizard 2026-04-16 per wizard-audit-2026-04-16.
+  // Leaving it in priors would have Surprise Me suggest values the user can't fill.
   lodging: {
     kind: 'single-enum',
     choices: [
@@ -137,14 +130,7 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
     pickCount: [0, 0],
     choices: [{ value: 'none', weight: 100 }],
   },
-  soberAttendees: {
-    kind: 'number',
-    choices: [
-      { value: 0, weight: 65 },
-      { value: 1, weight: 25 },
-      { value: 2, weight: 10 },
-    ],
-  },
+  // soberAttendees + recoveringInjury were cut from the wizard 2026-04-16.
   newMembers: {
     kind: 'boolean',
     choices: [
@@ -157,13 +143,6 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
     choices: [
       { value: false, weight: 85 },
       { value: true, weight: 15 },
-    ],
-  },
-  recoveringInjury: {
-    kind: 'boolean',
-    choices: [
-      { value: false, weight: 92 },
-      { value: true, weight: 8 },
     ],
   },
   groomFavoriteMusic: {
@@ -249,15 +228,8 @@ const MOH_PRIORS: BrandFieldPriors = {
       { value: 'mountain-glow', weight: 1 },
     ],
   },
-  venueQuality: {
-    kind: 'single-enum',
-    choices: [
-      { value: 'mid-range', weight: 50 },
-      { value: 'premium', weight: 28 },
-      { value: 'luxury', weight: 12 },
-      { value: 'budget', weight: 10 },
-    ],
-  },
+  // venueQuality was cut from the wizard 2026-04-16 per wizard-audit-2026-04-16.
+  // Leaving it in priors would have Surprise Me suggest values the user can't fill.
   lodging: {
     kind: 'single-enum',
     choices: [
@@ -358,13 +330,7 @@ const MOH_PRIORS: BrandFieldPriors = {
       { value: true, weight: 32 },
     ],
   },
-  strictDiet: {
-    kind: 'boolean',
-    choices: [
-      { value: false, weight: 85 },
-      { value: true, weight: 15 },
-    ],
-  },
+  // strictDiet was cut from the wizard 2026-04-16 per wizard-audit-2026-04-16.
   brideFavoriteMusic: {
     kind: 'string-suggestions',
     choices: [
