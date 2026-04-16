@@ -43,8 +43,8 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
   activityIntensity: {
     kind: 'single-enum',
     choices: [
-      { value: 'moderate', weight: 55 },
-      { value: 'send-it', weight: 30 },
+      { value: 'balanced', weight: 55 },
+      { value: 'unhinged', weight: 30 },
       { value: 'chill', weight: 15 },
     ],
   },
@@ -85,7 +85,7 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
   },
   activities: {
     kind: 'multi-enum',
-    pickCount: [2, 4],
+    pickCount: [3, 5],
     choices: [
       { value: 'golf', weight: 25 },
       { value: 'brewery-tour', weight: 18 },
@@ -95,6 +95,22 @@ const BESTMAN_PRIORS: BrandFieldPriors = {
       { value: 'sports-event', weight: 10 },
       { value: 'cigar-bar', weight: 6 },
       { value: 'helicopter', weight: 5 },
+    ],
+  },
+  groomType: {
+    kind: 'multi-enum',
+    pickCount: [1, 2],
+    choices: [
+      { value: 'party-animal', weight: 22 },
+      { value: 'outdoorsman', weight: 18 },
+      { value: 'sports-nut', weight: 15 },
+      { value: 'chill-king', weight: 12 },
+      { value: 'foodie', weight: 10 },
+      { value: 'golfer', weight: 8 },
+      { value: 'adrenaline', weight: 6 },
+      { value: 'music-head', weight: 5 },
+      { value: 'gamer', weight: 3 },
+      { value: 'culture-guy', weight: 1 },
     ],
   },
   budgetPriorities: {
@@ -252,7 +268,7 @@ const MOH_PRIORS: BrandFieldPriors = {
   },
   activities: {
     kind: 'multi-enum',
-    pickCount: [2, 4],
+    pickCount: [3, 5],
     choices: [
       { value: 'spa-day', weight: 22 },
       { value: 'wine-tour', weight: 20 },
@@ -262,6 +278,22 @@ const MOH_PRIORS: BrandFieldPriors = {
       { value: 'boudoir', weight: 8 },
       { value: 'pole-class', weight: 8 },
       { value: 'yoga', weight: 5 },
+    ],
+  },
+  brideType: {
+    kind: 'multi-enum',
+    pickCount: [1, 2],
+    choices: [
+      { value: 'party-animal', weight: 20 },
+      { value: 'foodie', weight: 18 },
+      { value: 'chill-king', weight: 15 },
+      { value: 'outdoorsman', weight: 12 },
+      { value: 'music-head', weight: 10 },
+      { value: 'culture-guy', weight: 8 },
+      { value: 'adrenaline', weight: 7 },
+      { value: 'gamer', weight: 5 },
+      { value: 'golfer', weight: 3 },
+      { value: 'sports-nut', weight: 2 },
     ],
   },
   budgetPriorities: {

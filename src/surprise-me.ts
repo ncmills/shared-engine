@@ -39,7 +39,10 @@ function pickMulti<T>(
   minPick: number,
   maxPick: number
 ): { values: T[]; avgWeightShare: number; total: number } {
-  const count = Math.max(minPick, Math.min(maxPick, Math.floor(minPick + Math.random() * (maxPick - minPick + 1))));
+  // If fewer choices available than the minimum, pick all remaining.
+  const effectiveMin = Math.min(minPick, choices.length);
+  const effectiveMax = Math.min(maxPick, choices.length);
+  const count = Math.max(effectiveMin, Math.min(effectiveMax, Math.floor(effectiveMin + Math.random() * (effectiveMax - effectiveMin + 1))));
   const remaining = [...choices];
   const total = choices.reduce((s, c) => s + c.weight, 0);
   const picked: T[] = [];
