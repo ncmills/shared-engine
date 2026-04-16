@@ -7,3 +7,4 @@ export * from './surprise-me';
 export * from './json-repair';
 export * from './hobbies';
 export * from './signals';
+export * from './room';
