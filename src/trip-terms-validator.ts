@@ -15,10 +15,11 @@ export interface TripTermsValidationInput {
   paymentTimeline?: string[];
   /** Full party size (including honoree). */
   groupSize: number;
-  /** "covered" means honoree's share is absorbed by the other N-1 payers. */
-  groomShare?: "covered" | "split" | "he-pays";
+  /** Absorption mode. Validator only reacts to the literal "covered";
+   *  other values ("split", "he-pays", "she-pays", etc.) skip rule 3. */
+  honoreeShare?: string;
   /** e.g. "Split across 9 payers instead of 10 → ~$131 extra per person." */
-  groomShareExplanation?: string;
+  honoreeShareExplanation?: string;
   /** Lodging rationale string — checked for embedded "$X/night × Y nights split Z ways" math. */
   lodgingRationale?: string;
 }
@@ -94,17 +95,17 @@ export function validateTripTerms(input: TripTermsValidationInput): TripTermsVal
     }
   }
 
-  // Rule 3: honoree absorption math. If groomShare is "covered", the other
+  // Rule 3: honoree absorption math. If honoreeShare is "covered", the other
   // (groupSize - 1) payers each cover an extra slice. Expected delta per
   // payer = perPersonTotal / (groupSize - 1). The explanation should cite a
   // number near that.
   if (
-    input.groomShare === "covered" &&
+    input.honoreeShare === "covered" &&
     input.groupSize > 1 &&
-    input.groomShareExplanation
+    input.honoreeShareExplanation
   ) {
     const expected = target / (input.groupSize - 1);
-    const cited = parseAllDollars(input.groomShareExplanation);
+    const cited = parseAllDollars(input.honoreeShareExplanation);
     // The explanation may also cite the payer's total ($X + target). Match
     // against the value closest to `expected` to be lenient on phrasing.
     if (cited.length > 0) {
@@ -114,7 +115,7 @@ export function validateTripTerms(input: TripTermsValidationInput): TripTermsVal
       const delta = Math.abs(closest - expected);
       if (delta > ABSORPTION_TOLERANCE_USD) {
         errors.push(
-          `groomShareExplanation cites ~$${closest.toFixed(0)} as the per-payer addition but expected is ~$${expected.toFixed(0)} (groupSize ${input.groupSize}, delta $${delta.toFixed(0)}; tolerance $${ABSORPTION_TOLERANCE_USD})`
+          `honoreeShareExplanation cites ~$${closest.toFixed(0)} as the per-payer addition but expected is ~$${expected.toFixed(0)} (groupSize ${input.groupSize}, delta $${delta.toFixed(0)}; tolerance $${ABSORPTION_TOLERANCE_USD})`
         );
       }
     }
