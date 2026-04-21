@@ -156,3 +156,48 @@ export function computePriceTargets(
     theKing: `${fmt(finalPrem * 0.9)}–${fmt(finalPrem * 1.1)}`,
   };
 }
+
+export type ArchiveTier = 'basic' | 'premium' | 'lux';
+
+// Archive-display buckets used by /looking-back on both sites. Semantics
+// match the user-facing labels (Under $800 / $800–$1,500 / $1,500+) so a
+// trip priced exactly at a boundary lands where the label says it should.
+// Accepts a scalar, a [lo, hi] tuple, or a { low, high } object; ranges
+// bucket on the average.
+export function tierForPrice(
+  input: number | { low: number; high: number } | [number, number] | null | undefined
+): ArchiveTier {
+  if (input == null) return 'basic';
+  let price: number;
+  if (typeof input === 'number') {
+    price = input;
+  } else if (Array.isArray(input)) {
+    price = (input[0] + input[1]) / 2;
+  } else {
+    price = (input.low + input.high) / 2;
+  }
+  if (!Number.isFinite(price) || price <= 0) return 'basic';
+  if (price < 800) return 'basic';
+  if (price < 1500) return 'premium';
+  return 'lux';
+}
+
+// Single helper for every "$X/person" rendering. Prevents the concat
+// footgun where a caller tacks "/person" onto a value that already
+// ends in "/person". Returns "" for missing or non-positive input so
+// the caller can decide on a fallback.
+export function formatPricePerPerson(
+  input: number | { low: number; high: number } | [number, number] | null | undefined
+): string {
+  if (input == null) return '';
+  const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input) || input <= 0) return '';
+    return `${usd(input)}/person`;
+  }
+  const [lo, hi] = Array.isArray(input) ? input : [input.low, input.high];
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return '';
+  if (lo <= 0 && hi <= 0) return '';
+  if (Math.round(lo) === Math.round(hi)) return `${usd(lo)}/person`;
+  return `${usd(lo)}–${usd(hi)}/person`;
+}
