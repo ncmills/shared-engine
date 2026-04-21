@@ -93,6 +93,18 @@ export async function handleSlotVote(
   const auth = await authorizeRoomAction(ctx, req, planId);
   if (!auth.ok) return auth.response;
 
+  // Wave E5 (2026-04-22) — member-level actions require an authed email.
+  // Owners bypass (they're authed by definition of the isOwner check); any
+  // other session-hash must carry a pmp-session cookie mapping to an email.
+  // Browsers that clear cookies or third-party agents will get a 403 and
+  // the client will surface the JoinBoardPrompt modal.
+  if (!auth.isOwner && !auth.email) {
+    return NextResponse.json(
+      { error: "Sign in to vote on this board.", code: "AUTH_REQUIRED" },
+      { status: 403 }
+    );
+  }
+
   const voteSlot = (auth.plan.voteSlots ?? []).find((v) => v.slotId === slotId);
   if (!voteSlot) {
     return NextResponse.json({ error: "vote slot not found" }, { status: 404 });
@@ -113,9 +125,10 @@ export async function handleSlotVote(
       {
         plan_id: planId,
         session_hash: auth.sessionHash,
+        user_email: auth.email ?? null,
         display_name: displayName || null,
         brand: ctx.brand,
-        role: auth.isOwner ? "owner" : "participant",
+        role: auth.isOwner ? "owner" : "member",
         last_active_at: new Date().toISOString(),
       },
       { onConflict: "plan_id,session_hash", ignoreDuplicates: false }
@@ -126,6 +139,7 @@ export async function handleSlotVote(
         plan_id: planId,
         slot_id: slotId,
         voter_session_hash: auth.sessionHash,
+        user_email: auth.email ?? null,
         chosen_item_path: chosenItemPath,
         updated_at: new Date().toISOString(),
       },

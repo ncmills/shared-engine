@@ -43,6 +43,16 @@ export async function handlePersonalItemPost(
   const auth = await authorizeRoomAction(ctx, req, planId);
   if (!auth.ok) return auth.response;
 
+  // Wave E5 (2026-04-22) — member-level actions require an authed email.
+  // Owners bypass. Non-owners without a session cookie get 403 + the client
+  // surfaces the JoinBoardPrompt modal.
+  if (!auth.isOwner && !auth.email) {
+    return NextResponse.json(
+      { error: "Sign in to add your details to this board.", code: "AUTH_REQUIRED" },
+      { status: 403 }
+    );
+  }
+
   const author = (displayName || anonDisplayName(auth.sessionHash)).slice(0, 80);
 
   if (!ctx.supabase) {
@@ -54,9 +64,10 @@ export async function handlePersonalItemPost(
       {
         plan_id: planId,
         session_hash: auth.sessionHash,
+        user_email: auth.email ?? null,
         display_name: author,
         brand: ctx.brand,
-        role: auth.isOwner ? "owner" : "participant",
+        role: auth.isOwner ? "owner" : "member",
         last_active_at: new Date().toISOString(),
       },
       { onConflict: "plan_id,session_hash", ignoreDuplicates: false }
@@ -69,6 +80,7 @@ export async function handlePersonalItemPost(
           plan_id: planId,
           participant_session_hash: auth.sessionHash,
           participant_display_name: author,
+          user_email: auth.email ?? null,
           type,
           details,
           updated_at: new Date().toISOString(),
