@@ -32,6 +32,16 @@ export async function handleLock(req: Request, ctx: RoomContext): Promise<Respon
   const block = ownerOnly(auth);
   if (block) return block;
 
+  // B1 — freeze at finalize. Once the trip is finalized, the date/guest
+  // fields feeding Trip Terms math are no longer editable. Owner must
+  // unfinalize first if they genuinely need to change these.
+  if (auth.plan.stage === "finalized") {
+    return NextResponse.json(
+      { error: "Trip is finalized. Unlock it before changing dates, guest count, or tier." },
+      { status: 409 }
+    );
+  }
+
   const plan = auth.plan;
   plan.lockedTier = tier as LockedTier;
   plan.lockedTierAt = new Date().toISOString();
