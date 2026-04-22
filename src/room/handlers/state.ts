@@ -59,7 +59,7 @@ export async function handleStateGet(
       .order("joined_at", { ascending: true }),
     ctx.supabase
       .from(TABLES.slotVotes)
-      .select("slot_id, voter_session_hash, chosen_item_path, updated_at")
+      .select("slot_id, voter_session_hash, user_email, chosen_item_path, updated_at")
       .eq("plan_id", planId),
     ctx.supabase
       .from(TABLES.personalItems)

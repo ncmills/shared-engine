@@ -134,17 +134,36 @@ export async function handleSlotVote(
       { onConflict: "plan_id,session_hash", ignoreDuplicates: false }
     );
 
-    await ctx.supabase.from(TABLES.slotVotes).upsert(
-      {
-        plan_id: planId,
-        slot_id: slotId,
-        voter_session_hash: auth.sessionHash,
-        user_email: auth.email ?? null,
-        chosen_item_path: chosenItemPath,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "slot_id,voter_session_hash" }
-    );
+    // B5 (2026-04-22) — slot votes upsert on (slot_id, user_email) so a crew
+    // member voting from phone then laptop lands on the same row instead of
+    // double-counting. E5 already blocks this path for unauthed callers, so
+    // auth.email is guaranteed present here — but we fall through to the
+    // legacy session-hash key if somehow an anonymous vote slips through.
+    if (auth.email) {
+      await ctx.supabase.from(TABLES.slotVotes).upsert(
+        {
+          plan_id: planId,
+          slot_id: slotId,
+          voter_session_hash: auth.sessionHash,
+          user_email: auth.email,
+          chosen_item_path: chosenItemPath,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "slot_id,user_email" }
+      );
+    } else {
+      await ctx.supabase.from(TABLES.slotVotes).upsert(
+        {
+          plan_id: planId,
+          slot_id: slotId,
+          voter_session_hash: auth.sessionHash,
+          user_email: null,
+          chosen_item_path: chosenItemPath,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "slot_id,voter_session_hash" }
+      );
+    }
 
     ctx.logSignal(req, "trip_room_activity", {
       brand: ctx.brand,
