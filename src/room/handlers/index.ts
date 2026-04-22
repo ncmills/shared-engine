@@ -35,6 +35,7 @@ export {
   handleCoOwnerInvite,
   handleMagicLinkClaim,
 } from "./coowner";
+export { handleMemberKick } from "./kick";
 export {
   handleTripResolve,
   handleTripSlugUpdate,

@@ -54,7 +54,7 @@ export async function handleStateGet(
   const [membersRes, slotVotesRes, personalItemsRes] = await Promise.allSettled([
     ctx.supabase
       .from(TABLES.members)
-      .select("session_hash, display_name, role, joined_at")
+      .select("session_hash, display_name, role, joined_at, user_email")
       .eq("plan_id", planId)
       .order("joined_at", { ascending: true }),
     ctx.supabase
