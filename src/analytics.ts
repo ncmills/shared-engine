@@ -11,6 +11,14 @@ export const CANONICAL_EVENTS = {
   SURPRISE_ME_USED: 'surprise_me_used',
   OFFER_VIEWED: 'offer_viewed',
   OFFER_CLICKED: 'offer_clicked',
+  WIZARD_ABANDONED: 'wizard_abandoned',
+  GENERATION_SUCCEEDED: 'generation_succeeded',
+  GENERATION_FAILED: 'generation_failed',
+  QUOTA_HIT: 'quota_hit',
+  CREW_SIGNUP_COMPLETED: 'crew_signup_completed',
+  VOTE_CAST: 'vote_cast',
+  GREENLIGHT_CLICKED: 'greenlight_clicked',
+  BOOKING_KIT_PARTNER_CLICK: 'booking_kit_partner_click',
 } as const;
 
 export type CanonicalEventName =
