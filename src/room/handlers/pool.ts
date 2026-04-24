@@ -220,10 +220,19 @@ export async function handleBindSlot(
   }
 
   const path = candidate.tierPath ?? candidate.id;
-  plan.scheduleOverrides = {
-    ...(plan.scheduleOverrides ?? {}),
-    [path]: { dayIdx, time },
-  };
+  // Swap-unschedule: clear any existing override that claims this
+  // (dayIdx, time) position so the legacy viewmodel doesn't render two
+  // items on top of each other. Without this, binding B to A's slot
+  // leaves A's override intact and A still appears scheduled there.
+  const existingOverrides = plan.scheduleOverrides ?? {};
+  const nextOverrides: typeof existingOverrides = {};
+  for (const [k, v] of Object.entries(existingOverrides)) {
+    if (k === path) continue;
+    if (v && v.dayIdx === dayIdx && v.time === time) continue;
+    nextOverrides[k] = v;
+  }
+  nextOverrides[path] = { dayIdx, time };
+  plan.scheduleOverrides = nextOverrides;
 
   // Atomically close any open vote that covered this candidate at this
   // (dayIdx, time) — binding a winner implicitly closes the vote.
