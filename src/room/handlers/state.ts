@@ -35,8 +35,11 @@ export async function handleStateGet(
   let derivedSlots: Slot[] | undefined;
   if (ctx.buildPoolsInputs) {
     try {
-      const { tierPlan, alternatesByPath } = ctx.buildPoolsInputs(plan);
-      const derived = buildPoolsAndSlots(plan, tierPlan, { alternatesByPath });
+      const inputs = ctx.buildPoolsInputs(plan);
+      const derived = buildPoolsAndSlots(plan, inputs.tierPlan, {
+        alternatesByCategory: inputs.alternatesByCategory,
+        tierKey: inputs.tierKey,
+      });
       categoryPools = derived.pools;
       derivedSlots = derived.slots;
     } catch (err) {

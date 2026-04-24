@@ -77,22 +77,24 @@ export interface RoomContext {
   computeSessionId: RoomComputeSessionIdFn;
 
   /**
-   * H2.0 — resolve the tierPlan + alternatesByPath from a stored plan so
-   * handleStateGet can emit categoryPools + derivedSlots. Optional:
-   * repos that haven't wired it yet simply omit the new fields from
-   * /api/room/state responses (clients behind NEXT_PUBLIC_UNIVERSAL_SLOT
-   * should then fall back to legacy rendering).
+   * H2.0 — resolve the tierPlan + category alternates from a stored plan
+   * so handleStateGet can emit categoryPools + derivedSlots. Optional:
+   * repos that haven't wired it simply omit the new fields from
+   * /api/room/state responses.
    *
    * Implementation responsibility (per repo):
    *   1. Walk plan.destinations → locate the locked-tier tierPlan
-   *   2. For tierPlan.lodging + each tierPlan.schedule item, call the
-   *      destination catalog (the same getDestinationById pattern used by
-   *      /api/swap) to gather up to N alternates
-   *   3. Return { tierPlan, alternatesByPath } keyed by the primary
-   *      item's tierPath ("lodging" or "<tierKey>.<category>.<i>").
+   *   2. Look up the destination catalog entry via getDestinationById
+   *      (the same path /api/swap uses) and bucket up to N alternates
+   *      per category (lodging / dining / bars / activities).
+   *   3. Return { tierPlan, alternatesByCategory, tierKey } so the
+   *      viewmodel can build stable paths like `{tierKey}.dining.{i}`.
    */
   buildPoolsInputs?: (plan: RoomStoredPlan) => {
     tierPlan: TierPlanLike | null;
-    alternatesByPath: Record<string, AlternateCandidate[]>;
+    alternatesByCategory: Partial<
+      Record<"lodging" | "activities" | "dining" | "bars" | "flights" | "transport", AlternateCandidate[]>
+    >;
+    tierKey?: string;
   };
 }

@@ -8,6 +8,13 @@
  *   side-effect-free. `/api/room/state` handlers call
  *   buildPoolsAndSlots(...) and attach the result to the response.
  *
+ *   TierPlan shape (per plan-types.ts + schedule-utils.ts):
+ *     - lodging            — 1 primary lodging item
+ *     - activities[]       — flat activity candidates, path `{tier}.activities.{i}`
+ *     - dining[]           — flat dining candidates, path `{tier}.dining.{i}`
+ *     - bars[]             — flat bar candidates, path `{tier}.bars.{i}`
+ *     - schedule[].items[] — daily narrative, NOT candidates in H2.0
+ *
  *   Approved plan: ~/.claude/plans/ask-me-anyquesitons-here-happy-dream.md
  *   Full design:   ~/.claude/plans/h2-0-category-pools-design.md
  */
@@ -27,31 +34,24 @@ import type {
 /** Narrow shape the viewmodel reads off tierPlan. Defensive — both BMHQ
  *  and MOH have extra fields; we only touch these. */
 export interface TierPlanLike {
-  schedule?: Array<TierEventLike>;
   lodging?: TierItemLike;
-}
-
-export interface TierEventLike {
-  path?: string;
-  title?: string;
-  name?: string;
-  description?: string;
-  time?: string;
-  dayIdx?: number;
-  category?: string;
-  imageUrl?: string;
-  image?: string;
-  price?: string;
-  url?: string;
+  activities?: TierItemLike[];
+  dining?: TierItemLike[];
+  bars?: TierItemLike[];
 }
 
 export interface TierItemLike {
   name?: string;
   title?: string;
   description?: string;
+  rationale?: string;
+  highlight?: string;
   imageUrl?: string;
   image?: string;
   price?: string;
+  costPerNight?: string;
+  costPerPerson?: string;
+  priceRange?: string;
   url?: string;
 }
 
@@ -62,18 +62,25 @@ export interface AlternateCandidate {
   name?: string;
   title?: string;
   description?: string;
+  highlight?: string;
   imageUrl?: string;
   image?: string;
   price?: string;
+  priceRange?: string;
   url?: string;
 }
 
 export interface BuildPoolsOptions {
-  /** Keyed by the primary AI tierPath (e.g. "lodging",
-   *  "theLegend.dining.2"). Each value is an array of up to 4–10
-   *  destination-catalog alternates that get emitted as additional AI
-   *  Candidates in the same pool, replacing the current Swap drawer. */
-  alternatesByPath?: Record<string, AlternateCandidate[]>;
+  /** Destination-catalog alternates bucketed by category. Emitted as
+   *  additional AI candidates in each pool. Replaces the legacy Swap
+   *  drawer — the user's "Replace Swap" decision. Typical payload:
+   *  ~4–6 alternates per category with a primary in that category. */
+  alternatesByCategory?: Partial<Record<CandidateCategory, AlternateCandidate[]>>;
+
+  /** Tier key used to build `{tier}.dining.{i}` paths. When omitted,
+   *  falls back to "tier" so paths are stable but not legacy-compatible.
+   *  BMHQ/MOH pass plan.lockedTier (e.g. "theLegend"). */
+  tierKey?: string;
 }
 
 const CATEGORIES: readonly CandidateCategory[] = [
@@ -95,7 +102,7 @@ const CATEGORIES: readonly CandidateCategory[] = [
  * Emits 6 pools (one per category) even when empty, so the client can
  * render 6 cards without null-handling. `slots` contains entries for
  * every bound/voting/proposed position — positions with no activity are
- * omitted (renderable from derivedSlots + tierPlan).
+ * omitted.
  */
 export function buildPoolsAndSlots(
   plan: RoomStoredPlan,
@@ -104,12 +111,20 @@ export function buildPoolsAndSlots(
 ): { pools: CategoryPool[]; slots: Slot[] } {
   const seededAt =
     plan.lockedTierAt ?? (plan as { createdAt?: string }).createdAt ?? "";
+  const tierKey = options.tierKey ?? "tier";
 
   const candidates: Candidate[] = [];
 
-  // 1. AI-seeded candidates from tierPlan + alternates.
+  // 1. AI-seeded candidates from tierPlan flat arrays + alternates.
   if (tierPlan) {
-    candidates.push(...buildAiCandidates(tierPlan, options.alternatesByPath ?? {}, seededAt));
+    candidates.push(
+      ...buildAiCandidates(
+        tierPlan,
+        options.alternatesByCategory ?? {},
+        seededAt,
+        tierKey
+      )
+    );
   }
 
   // 2. User candidates migrated from externalBookings.
@@ -145,12 +160,13 @@ export function buildPoolsAndSlots(
 
 function buildAiCandidates(
   tierPlan: TierPlanLike,
-  alternatesByPath: Record<string, AlternateCandidate[]>,
-  seededAt: string
+  alternatesByCategory: Partial<Record<CandidateCategory, AlternateCandidate[]>>,
+  seededAt: string,
+  tierKey: string
 ): Candidate[] {
   const out: Candidate[] = [];
 
-  // ── Lodging — 1 primary + alternates from catalog ──
+  // ── Lodging — 1 primary ──
   if (tierPlan.lodging) {
     out.push({
       id: "cand_ai_lodging",
@@ -158,44 +174,57 @@ function buildAiCandidates(
       source: "ai",
       tierPath: "lodging",
       title: tierPlan.lodging.name ?? tierPlan.lodging.title,
-      description: tierPlan.lodging.description,
+      description: tierPlan.lodging.description ?? tierPlan.lodging.rationale,
       imageUrl: tierPlan.lodging.imageUrl ?? tierPlan.lodging.image,
-      price: tierPlan.lodging.price,
+      price: tierPlan.lodging.costPerNight ?? tierPlan.lodging.priceRange ?? tierPlan.lodging.price,
       url: tierPlan.lodging.url,
       addedBy: "ai",
       addedAt: seededAt,
     });
-    const lodgingAlts = alternatesByPath["lodging"] ?? [];
-    lodgingAlts.forEach((alt, i) => {
-      out.push(alternateToCandidate(alt, "lodging", `lodging.alt.${i}`, seededAt));
-    });
   }
 
-  // ── Schedule items — primary + per-item alternates ──
-  for (const ev of tierPlan.schedule ?? []) {
-    const path = ev.path;
-    if (!path) continue;
-    const category = classifyEventCategory(ev);
-    out.push({
-      id: `cand_ai_${path}`,
-      category,
-      source: "ai",
-      tierPath: path,
-      title: ev.title ?? ev.name,
-      description: ev.description,
-      imageUrl: ev.imageUrl ?? ev.image,
-      price: ev.price,
-      url: ev.url,
-      addedBy: "ai",
-      addedAt: seededAt,
-    });
-    const alts = alternatesByPath[path] ?? [];
+  // ── Flat-array candidates: activities / dining / bars ──
+  pushFlatArray(out, tierPlan.activities, "activities", tierKey, seededAt);
+  pushFlatArray(out, tierPlan.dining, "dining", tierKey, seededAt);
+  pushFlatArray(out, tierPlan.bars, "bars", tierKey, seededAt);
+
+  // ── Category-level alternates from destination catalog ──
+  for (const category of CATEGORIES) {
+    const alts = alternatesByCategory[category] ?? [];
     alts.forEach((alt, i) => {
-      out.push(alternateToCandidate(alt, category, `${path}.alt.${i}`, seededAt));
+      const syntheticPath =
+        category === "lodging"
+          ? `lodging.alt.${i}`
+          : `${tierKey}.${category}.alt.${i}`;
+      out.push(alternateToCandidate(alt, category, syntheticPath, seededAt));
     });
   }
 
   return out;
+}
+
+function pushFlatArray(
+  out: Candidate[],
+  arr: TierItemLike[] | undefined,
+  category: CandidateCategory,
+  tierKey: string,
+  seededAt: string
+): void {
+  (arr ?? []).forEach((item, i) => {
+    out.push({
+      id: `cand_ai_${tierKey}.${category}.${i}`,
+      category,
+      source: "ai",
+      tierPath: `${tierKey}.${category}.${i}`,
+      title: item.name ?? item.title,
+      description: item.description ?? item.rationale ?? item.highlight,
+      imageUrl: item.imageUrl ?? item.image,
+      price: item.priceRange ?? item.costPerPerson ?? item.costPerNight ?? item.price,
+      url: item.url,
+      addedBy: "ai",
+      addedAt: seededAt,
+    });
+  });
 }
 
 function alternateToCandidate(
@@ -210,9 +239,9 @@ function alternateToCandidate(
     source: "ai",
     tierPath: syntheticPath,
     title: alt.title ?? alt.name,
-    description: alt.description,
+    description: alt.description ?? alt.highlight,
     imageUrl: alt.imageUrl ?? alt.image,
-    price: alt.price,
+    price: alt.priceRange ?? alt.price,
     url: alt.url,
     addedBy: "ai",
     addedAt: seededAt,
@@ -253,28 +282,6 @@ function placeholderToCandidate(ph: PlaceholderItem): Candidate {
 // ────────────────────────────────────────────────────────────────────────
 // Category classification
 // ────────────────────────────────────────────────────────────────────────
-
-/** Classify a tierPlan schedule event into a CandidateCategory. Reads
- *  `ev.category` when set; else parses the second segment of
- *  `theLegend.dining.2`-style paths; else falls back to activities. */
-export function classifyEventCategory(ev: TierEventLike): CandidateCategory {
-  const raw = (ev.category ?? "").toLowerCase();
-  if (raw === "lodging") return "lodging";
-  if (raw === "dining" || raw === "food") return "dining";
-  if (raw === "bars" || raw === "nightlife" || raw === "bar") return "bars";
-  if (raw === "activities" || raw === "activity") return "activities";
-  if (raw === "flights" || raw === "flight") return "flights";
-  if (raw === "transport" || raw === "transportation") return "transport";
-
-  // Fallback: parse path segment (e.g. "theLegend.dining.2")
-  const seg = ev.path?.split(".")[1]?.toLowerCase();
-  if (seg === "dining") return "dining";
-  if (seg === "bars" || seg === "nightlife") return "bars";
-  if (seg === "activities") return "activities";
-  if (seg === "lodging") return "lodging";
-
-  return "activities";
-}
 
 export function placeholderDetailToCategory(
   detail: PlaceholderDetail
@@ -379,9 +386,7 @@ export function deriveSlotsFromLegacyFields(
   }
 
   // ── Day-time slots from voteSlots (open + closed) ──
-  const voteSlotSlotIds = new Set<string>();
   for (const vs of plan.voteSlots ?? []) {
-    voteSlotSlotIds.add(vs.slotId);
     const slot = voteSlotToSlot(vs, candidateByTierPath, candidateById);
     if (slot) out.push(slot);
   }
