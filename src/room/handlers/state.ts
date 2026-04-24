@@ -3,7 +3,7 @@ import type { RoomContext } from "../context";
 import { isOwnerForPlan } from "../auth";
 import { TABLES } from "../tables";
 import { buildPoolsAndSlots } from "../viewmodel";
-import type { CategoryPool, Slot } from "../types";
+import type { CategoryPool, Expense, Slot } from "../types";
 
 /**
  * GET /api/room/state?planId=xxx
@@ -76,7 +76,7 @@ export async function handleStateGet(
     });
   }
 
-  const [membersRes, slotVotesRes, personalItemsRes] = await Promise.allSettled([
+  const [membersRes, slotVotesRes, personalItemsRes, expensesRes] = await Promise.allSettled([
     ctx.supabase
       .from(TABLES.members)
       .select("session_hash, display_name, role, joined_at, user_email")
@@ -91,7 +91,43 @@ export async function handleStateGet(
       .select("id, participant_session_hash, participant_display_name, type, details, updated_at")
       .eq("plan_id", planId)
       .order("updated_at", { ascending: false }),
+    // H2.5 — expense ledger rows; crew sees verified only, owners see all.
+    ctx.supabase
+      .from("wp_trip_room_expenses")
+      .select("*")
+      .eq("plan_id", planId)
+      .order("created_at", { ascending: true }),
   ]);
+
+  let expenses: Expense[] | undefined;
+  if (expensesRes.status === "fulfilled") {
+    const rows = (expensesRes.value.data ?? []) as Array<{
+      id: string; plan_id: string; source: "slot" | "manual";
+      slot_id: string | null; candidate_id: string | null; label: string;
+      amount_cents: number; suggested_cents: number | null;
+      payer_email: string; split_emails: string[] | null;
+      status: "proposed" | "verified"; per_person_hint: boolean;
+      created_at: string; updated_at: string;
+    }>;
+    const all: Expense[] = rows.map(r => ({
+      id: r.id,
+      planId: r.plan_id,
+      source: r.source,
+      slotId: r.slot_id,
+      candidateId: r.candidate_id,
+      label: r.label,
+      amountCents: r.amount_cents,
+      suggestedCents: r.suggested_cents,
+      payerEmail: r.payer_email,
+      splitEmails: r.split_emails ?? [],
+      status: r.status,
+      perPersonHint: r.per_person_hint,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+    // Crew sees only verified rows; owner/co-owner gets all.
+    expenses = isOwner ? all : all.filter(e => e.status === "verified");
+  }
 
   return NextResponse.json({
     ...baseResponse,
@@ -103,5 +139,6 @@ export async function handleStateGet(
       personalItemsRes.status === "fulfilled"
         ? personalItemsRes.value.data ?? []
         : [],
+    expenses,
   });
 }

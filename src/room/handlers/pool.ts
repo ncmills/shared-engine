@@ -35,6 +35,7 @@ import {
   readBody,
   type RoomAuthorized,
 } from "./shared";
+import { buildProposedSeed } from "../expenses";
 
 const VALID_CATEGORIES: CandidateCategory[] = [
   "lodging",
@@ -207,6 +208,7 @@ export async function handleBindSlot(
     });
     await ctx.kv.storePlan(plan);
     logBind(req, ctx, planId, candidate);
+    await autoProposeExpense(ctx, plan, "slot_lodging", candidate);
     return NextResponse.json({ ok: true, plan });
   }
 
@@ -252,7 +254,67 @@ export async function handleBindSlot(
 
   await ctx.kv.storePlan(plan);
   logBind(req, ctx, planId, candidate);
+  await autoProposeExpense(ctx, plan, `slot_bound_${path}`, candidate);
   return NextResponse.json({ ok: true, plan });
+}
+
+/**
+ * H2.5 — upsert a proposed expense row for the bound candidate. Silent
+ * no-op when no Supabase client is wired, when the candidate has no
+ * parseable price, or when the database rejects the write. Must not
+ * fail the bind request.
+ */
+async function autoProposeExpense(
+  ctx: RoomContext,
+  plan: RoomStoredPlan,
+  slotId: string,
+  candidate: Candidate
+): Promise<void> {
+  if (!ctx.supabase) return;
+  try {
+    const ownerEmail = (plan.inputs?.organizerEmail ?? "").trim().toLowerCase();
+    if (!ownerEmail) return;
+    const { data: memberRows } = await ctx.supabase
+      .from("wp_trip_room_members")
+      .select("user_email")
+      .eq("plan_id", plan.id);
+    const memberEmails = (memberRows ?? [])
+      .map((r: { user_email: string | null }) => (r.user_email ?? "").toLowerCase())
+      .filter(Boolean);
+    const seed = buildProposedSeed({
+      planId: plan.id,
+      slotId,
+      candidateId: candidate.id,
+      candidateTitle: candidate.title,
+      candidatePrice: candidate.price,
+      category: candidate.category,
+      ownerEmail,
+      memberEmails,
+      plan,
+    });
+    if (!seed) return;
+    const { error } = await ctx.supabase
+      .from("wp_trip_room_expenses")
+      .upsert(
+        {
+          plan_id: seed.planId,
+          source: seed.source,
+          slot_id: seed.slotId,
+          candidate_id: seed.candidateId,
+          label: seed.label,
+          amount_cents: seed.amountCents,
+          suggested_cents: seed.suggestedCents,
+          payer_email: seed.payerEmail,
+          split_emails: seed.splitEmails,
+          per_person_hint: seed.perPersonHint,
+          status: "proposed",
+        },
+        { onConflict: "plan_id,slot_id", ignoreDuplicates: false }
+      );
+    if (error) console.error("[H2.5 autoProposeExpense]", error);
+  } catch (err) {
+    console.error("[H2.5 autoProposeExpense] unexpected", err);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────

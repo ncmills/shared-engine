@@ -201,3 +201,30 @@ export function formatPricePerPerson(
   if (Math.round(lo) === Math.round(hi)) return `${usd(lo)}/person`;
   return `${usd(lo)}–${usd(hi)}/person`;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+//  Expense price parser (H2.5 Splitwise ledger)
+//  Pulls a cents integer out of the messy price strings that AI + scraped
+//  Candidates carry. Used at bind-time to auto-propose an expense row.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface ParsedPrice {
+  cents: number;
+  perPersonHint: boolean;
+}
+
+const MONEY_RE = /\$?\s*([\d,]+(?:\.\d{2})?)/;
+const PER_PERSON_RE = /(\/\s*pp|per\s*person|\/\s*person|\bpp\b|\beach\b|\bea\.)/i;
+
+export function parseCentsFromPriceString(input: string | null | undefined): ParsedPrice | null {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (!s) return null;
+  const m = s.match(MONEY_RE);
+  if (!m || !m[1]) return { cents: 0, perPersonHint: PER_PERSON_RE.test(s) };
+  const raw = m[1].replace(/,/g, "");
+  const dollars = Number(raw);
+  if (!Number.isFinite(dollars) || dollars < 0) return null;
+  const cents = Math.round(dollars * 100);
+  return { cents, perPersonHint: PER_PERSON_RE.test(s) };
+}

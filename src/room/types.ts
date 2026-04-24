@@ -124,6 +124,32 @@ export interface TripRoomState {
    */
   categoryPools?: CategoryPool[];
   derivedSlots?: Slot[];
+  /**
+   * H2.5 — Splitwise ledger. Non-owners receive only status='verified'
+   * rows; owners/co-owners receive all. Undefined if the consumer repo
+   * isn't wired for the expenses table (graceful degradation).
+   */
+  expenses?: Expense[];
+}
+
+export type ExpenseSource = "slot" | "manual";
+export type ExpenseStatus = "proposed" | "verified";
+
+export interface Expense {
+  id: string;
+  planId: string;
+  source: ExpenseSource;
+  slotId?: string | null;
+  candidateId?: string | null;
+  label: string;
+  amountCents: number;
+  suggestedCents?: number | null;
+  payerEmail: string;
+  splitEmails: string[];
+  status: ExpenseStatus;
+  perPersonHint: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -170,6 +196,13 @@ export interface RoomStoredPlan {
    */
   candidates?: Candidate[];
   slots?: Slot[];
+  /**
+   * H2.5 — owner's Venmo handle, stored here because the original owner
+   * doesn't always have a wp_trip_room_members shadow row. Members use
+   * the column on wp_trip_room_members; the union read is in
+   * room/expenses.ts::getRosterEmails.
+   */
+  ownerVenmoUsername?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────

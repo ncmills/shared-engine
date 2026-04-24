@@ -164,6 +164,18 @@ export function venmoRequestUrl(username: string, amountCents: number, note: str
   return `https://venmo.com/${encodeURIComponent(username)}?${q.toString()}`;
 }
 
+// H2.5 — used by "Settle up" on the crew-side ExpenseDrawer. Opens Venmo
+// prefilled to PAY the listed payer, not request from them.
+export function venmoPayUrl(username: string, amountCents: number, note: string): string {
+  const amount = (amountCents / 100).toFixed(2);
+  const q = new URLSearchParams();
+  q.set("txn", "pay");
+  q.set("amount", amount);
+  q.set("note", note);
+  q.set("audience", "private");
+  return `https://venmo.com/${encodeURIComponent(username)}?${q.toString()}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 //  GENERIC
 // ─────────────────────────────────────────────────────────────────────

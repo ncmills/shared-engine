@@ -25,3 +25,4 @@ export * from "./handlers";
 export * from "./hooks";
 export * from "./itemized-budget";
 export * from "./viewmodel";
+export * from "./expenses";
