@@ -28,3 +28,4 @@ export * from "./viewmodel";
 export * from "./expenses";
 export * from "./email-parsers";
 export * from "./email-ingest";
+export * from "./itinerary-view";
