@@ -10,6 +10,7 @@
  */
 
 import type {
+  CandidateCategory,
   ExternalBooking,
   LockedTier,
   PlaceholderDetail,
@@ -174,5 +175,54 @@ export const roomApi = {
     slug: string;
   }> {
     return postJson("/api/trip/slug", args);
+  },
+
+  // ── H2.0 Category Pools ──────────────────────────────────────────────
+
+  addCandidate(args: {
+    planId: string;
+    category: CandidateCategory;
+    source: "link" | "text" | "email";
+    title?: string;
+    url?: string;
+    price?: string;
+    description?: string;
+    imageUrl?: string;
+    providerName?: string;
+    notes?: string;
+    displayName?: string;
+  }): Promise<PlanResponse> {
+    return postJson<PlanResponse>("/api/room/pool/candidate", args);
+  },
+
+  bindSlot(args: {
+    planId: string;
+    candidateId: string;
+    dayIdx?: number;
+    time?: string;
+    closeVoteSlotId?: string;
+  }): Promise<PlanResponse> {
+    return postJson<PlanResponse>("/api/room/pool/bind", args);
+  },
+
+  openCategoryVote(args: {
+    planId: string;
+    category: CandidateCategory;
+    candidateIds: string[];
+    dayIdx?: number;
+    time?: string;
+    label?: string;
+  }): Promise<PlanResponse & { slotId: string }> {
+    return postJson("/api/room/pool/vote", args);
+  },
+
+  openSlotForIdeas(args: {
+    planId: string;
+    category: CandidateCategory;
+    dayIdx: number;
+    time?: string;
+    label?: string;
+  }): Promise<PlanResponse & { slotId: string }> {
+    return postJson("/api/room/pool/open", args);
   },
 };
