@@ -12,6 +12,7 @@
 import type { BrandId } from "../types";
 import type { RoomStoredPlan } from "./types";
 import type { RedisLike } from "./slug";
+import type { AlternateCandidate, TierPlanLike } from "./viewmodel";
 
 /**
  * Supabase client injected by the consumer repo. Typed as `any`-shaped here
@@ -74,4 +75,24 @@ export interface RoomContext {
   supabase: SupabaseLike | null;
   logSignal: RoomLogSignalFn;
   computeSessionId: RoomComputeSessionIdFn;
+
+  /**
+   * H2.0 — resolve the tierPlan + alternatesByPath from a stored plan so
+   * handleStateGet can emit categoryPools + derivedSlots. Optional:
+   * repos that haven't wired it yet simply omit the new fields from
+   * /api/room/state responses (clients behind NEXT_PUBLIC_UNIVERSAL_SLOT
+   * should then fall back to legacy rendering).
+   *
+   * Implementation responsibility (per repo):
+   *   1. Walk plan.destinations → locate the locked-tier tierPlan
+   *   2. For tierPlan.lodging + each tierPlan.schedule item, call the
+   *      destination catalog (the same getDestinationById pattern used by
+   *      /api/swap) to gather up to N alternates
+   *   3. Return { tierPlan, alternatesByPath } keyed by the primary
+   *      item's tierPath ("lodging" or "<tierKey>.<category>.<i>").
+   */
+  buildPoolsInputs?: (plan: RoomStoredPlan) => {
+    tierPlan: TierPlanLike | null;
+    alternatesByPath: Record<string, AlternateCandidate[]>;
+  };
 }

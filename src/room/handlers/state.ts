@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { RoomContext } from "../context";
 import { isOwnerForPlan } from "../auth";
 import { TABLES } from "../tables";
+import { buildPoolsAndSlots } from "../viewmodel";
+import type { CategoryPool, Slot } from "../types";
 
 /**
  * GET /api/room/state?planId=xxx
@@ -26,6 +28,24 @@ export async function handleStateGet(
   const email = await ctx.auth.getSessionEmail();
   const { isOwner, isOriginalOwner } = isOwnerForPlan(plan, email);
 
+  // H2.0 — when the repo has wired buildPoolsInputs, derive pools + slots
+  // and attach to the response. Flag-independent: clients gated on
+  // NEXT_PUBLIC_UNIVERSAL_SLOT consume it, others ignore the extra fields.
+  let categoryPools: CategoryPool[] | undefined;
+  let derivedSlots: Slot[] | undefined;
+  if (ctx.buildPoolsInputs) {
+    try {
+      const { tierPlan, alternatesByPath } = ctx.buildPoolsInputs(plan);
+      const derived = buildPoolsAndSlots(plan, tierPlan, { alternatesByPath });
+      categoryPools = derived.pools;
+      derivedSlots = derived.slots;
+    } catch (err) {
+      // Never fail the state route because of a viewmodel bug — flag-off
+      // clients must stay healthy. Log + leave pools undefined.
+      console.warn("[room/state] buildPoolsInputs threw:", err);
+    }
+  }
+
   const baseResponse = {
     sessionHash,
     isOwner,
@@ -39,6 +59,8 @@ export async function handleStateGet(
     homeAirport: plan.homeAirport,
     slug: plan.slug,
     coOwners: plan.coOwners ?? [],
+    categoryPools,
+    derivedSlots,
   };
 
   if (!ctx.supabase) {
