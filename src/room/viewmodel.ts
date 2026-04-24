@@ -492,3 +492,67 @@ function isInOpenVote(
   }
   return false;
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// H3.3 — Trip stage machine
+// ────────────────────────────────────────────────────────────────────────
+// Derives a richer lifecycle state than the stored `plan.stage` field.
+// `live` + `archived` are computed from `now` against check-in/check-out
+// dates, and only surface once the owner has locked or finalized the trip
+// (never from preview). The consumer UI branches on this to promote
+// Map/HappeningNow (live) or MemoriesSection (archived). Pure + sync +
+// injectable clock so tests/goldens stay deterministic.
+
+export type TripStage =
+  | "preview"
+  | "locked"
+  | "finalized"
+  | "live"
+  | "archived";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Grace window after check-out before a trip flips to archived. Lets
+ *  crew upload memories while the weekend is still fresh. */
+const ARCHIVE_GRACE_DAYS = 3;
+
+export function computeTripStage(
+  plan: RoomStoredPlan,
+  now: Date = new Date()
+): TripStage {
+  const base: TripStage =
+    plan.stage === "finalized"
+      ? "finalized"
+      : plan.stage === "locked"
+      ? "locked"
+      : "preview";
+
+  // Preview never escalates to live/archived.
+  if (base === "preview") return "preview";
+
+  // Prefer the owner-confirmed finalCheck* fields; fall back to
+  // wizard-provided `inputs.checkIn/checkOut` (open-type shape).
+  const wizardInputs = plan.inputs as
+    | { checkIn?: string; checkOut?: string }
+    | undefined;
+  const checkIn = parseTripDate(plan.finalCheckIn ?? wizardInputs?.checkIn);
+  const checkOut = parseTripDate(plan.finalCheckOut ?? wizardInputs?.checkOut);
+
+  if (!checkIn || !checkOut) return base;
+
+  // Trip "ends" at the end of the check-out day; add 1 day so a `now`
+  // anywhere during checkOut still counts as live.
+  const endOfCheckOut = new Date(checkOut.getTime() + DAY_MS);
+  const archiveBoundary = new Date(
+    endOfCheckOut.getTime() + ARCHIVE_GRACE_DAYS * DAY_MS
+  );
+
+  if (now >= archiveBoundary) return "archived";
+  if (now >= checkIn && now < endOfCheckOut) return "live";
+  return base;
+}
+
+function parseTripDate(input: string | undefined | null): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
