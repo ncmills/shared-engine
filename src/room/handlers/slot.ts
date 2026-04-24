@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { RoomContext } from "../context";
-import type { VoteSlot } from "../types";
+import type { Slot, VoteSlot } from "../types";
 import { TABLES } from "../tables";
 import { authorizeRoomAction, ownerOnly, readBody } from "./shared";
 
@@ -214,7 +214,8 @@ export async function handleSlotClose(
     return NextResponse.json({ error: "winner not among candidates" }, { status: 400 });
   }
 
-  vs.closedAt = new Date().toISOString();
+  const closedAt = new Date().toISOString();
+  vs.closedAt = closedAt;
   if (winnerItemPath) {
     vs.winnerItemPath = winnerItemPath;
     const overrides = { ...(plan.scheduleOverrides ?? {}) };
@@ -225,6 +226,44 @@ export async function handleSlotClose(
     }
     plan.scheduleOverrides = overrides;
   }
+
+  // H2.0 forward-compat — mirror the close onto plan.slots[] so H2.1+
+  // readers see the locked state without re-deriving from voteSlots. The
+  // viewmodel continues to derive from voteSlots for H2.0 reads, so this
+  // write is purely additive.
+  const derivedSlotId = `slot_vote_${vs.slotId}`;
+  const slots = plan.slots ?? [];
+  const existingIdx = slots.findIndex((s) => s.id === derivedSlotId);
+  // winnerItemPath is either a tierPath ("theLegend.dining.2") whose
+  // candidate id is `cand_ai_<path>`, or a user-added candidate id
+  // ("cand_abc123") used as-is.
+  const boundCandidateId = !winnerItemPath
+    ? undefined
+    : winnerItemPath.startsWith("cand_")
+      ? winnerItemPath
+      : `cand_ai_${winnerItemPath}`;
+  const base: Slot | undefined = existingIdx >= 0 ? slots[existingIdx] : undefined;
+  const updated: Slot = {
+    id: derivedSlotId,
+    category: base?.category ?? "activities",
+    scope: base?.scope ?? "day-time",
+    dayIdx: vs.dayIdx,
+    time: vs.time,
+    label: vs.label,
+    status: "locked",
+    boundCandidateId,
+    voteCandidateIds: base?.voteCandidateIds ?? vs.itemPaths,
+    voteOpenedAt: vs.openAt,
+    voteClosedAt: closedAt,
+    createdBy: base?.createdBy ?? "owner",
+    createdAt: base?.createdAt ?? vs.openAt,
+  };
+  if (existingIdx >= 0) {
+    slots[existingIdx] = updated;
+  } else {
+    slots.push(updated);
+  }
+  plan.slots = slots;
 
   await ctx.kv.storePlan(plan);
 

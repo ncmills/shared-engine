@@ -116,6 +116,14 @@ export interface TripRoomState {
   slotVotes: SlotVoteRow[];
   personalItems: PersonalItem[];
   note?: string;
+  /**
+   * H2.0 — read-time view derived from the canonical storage fields
+   * (placeholders, externalBookings, voteSlots, scheduleOverrides, tierPlan).
+   * Flag-independent: always populated. Clients gated on
+   * NEXT_PUBLIC_UNIVERSAL_SLOT consume this; legacy clients ignore it.
+   */
+  categoryPools?: CategoryPool[];
+  derivedSlots?: Slot[];
 }
 
 /**
@@ -153,4 +161,145 @@ export interface RoomStoredPlan {
   /** Destination tiers (budget/mid/premium). Typed defensively — handlers
    *  only read `destinations?.<tier>?.plans?.<tierName>?.tripName`. */
   destinations?: unknown;
+  /**
+   * H2.0 — additive storage for the universal Slot + Candidate primitive.
+   * Written alongside the legacy fields (voteSlots, placeholders,
+   * externalBookings, scheduleOverrides) which remain canonical for
+   * H2.0. Clients read the derived TripRoomState.categoryPools /
+   * derivedSlots view rather than these fields directly.
+   */
+  candidates?: Candidate[];
+  slots?: Slot[];
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// H2.0 — Universal Slot + CategoryPool primitive
+// ────────────────────────────────────────────────────────────────────────
+// The Candidate + Slot model unifies four previously disjoint primitives
+// (PlaceholderItem, ExternalBooking, VoteSlot, scheduleOverrides) under
+// one pool-based UX. Storage stays backwards-compat: these types layer on
+// top of the existing fields, with read-time derivation in viewmodel.ts
+// and write-through to the legacy fields in handlers/pool.ts.
+//
+// Full design doc: ~/.claude/plans/h2-0-category-pools-design.md
+// Approved plan:   ~/.claude/plans/ask-me-anyquesitons-here-happy-dream.md
+
+export type CandidateCategory =
+  | "lodging"
+  | "activities"
+  | "dining"
+  | "bars"
+  | "flights"
+  | "transport";
+
+export type CandidateSource = "ai" | "link" | "text" | "email";
+
+/**
+ * A Candidate is anything that can fill a Slot. One shape regardless of
+ * where it came from. `source` is the provenance; attribution is always
+ * `addedBy` + optional `addedByName`.
+ *
+ * AI-seeded candidates are virtualized views of items already in
+ * `tierPlan.schedule[]` / `tierPlan.lodging` (+ destination-catalog
+ * alternates pre-computed by the caller). They carry a `tierPath`
+ * pointer and do NOT duplicate the underlying event data — the viewmodel
+ * resolves `tierPath` → full event at render time.
+ *
+ * Non-AI candidates store their data inline; they have no `tierPath`.
+ */
+export interface Candidate {
+  id: string;
+  category: CandidateCategory;
+  source: CandidateSource;
+
+  /** AI-seeded only: points to a path in the locked tierPlan or a
+   *  caller-provided alternate (e.g. "theLegend.dining.2" or
+   *  "lodging.alt.0"). */
+  tierPath?: string;
+
+  /** Display fields — optional because the viewmodel fills them for AI
+   *  rows from the referenced tierPath. */
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+  url?: string;
+  price?: string;
+  providerName?: string;
+
+  /** Attribution. `addedBy === "ai"` is the sentinel for engine-seeded. */
+  addedBy: string;
+  addedByName?: string;
+  addedAt: string;
+
+  /** Free-text only: the author's intent. */
+  notes?: string;
+
+  /** Ephemeral UI hint — carried on the object so it survives polls.
+   *  Set while an OG scrape is mid-fetch. Never persisted to Redis. */
+  draft?: boolean;
+}
+
+/**
+ * A CategoryPool is the set of Candidates the crew is considering for a
+ * single category. Pools are DERIVED at read-time (see viewmodel.ts),
+ * not stored — the storage field `RoomStoredPlan.candidates` is a flat
+ * list, and the viewmodel buckets into pools.
+ */
+export interface CategoryPool {
+  category: CandidateCategory;
+  candidates: Candidate[];
+}
+
+/**
+ * A Slot is a position on the itinerary that binds one Candidate.
+ *
+ * Scope is encoded via optional fields:
+ *   - Lodging → { scope: "trip" }                    1 per trip
+ *   - Activity/Dining/Bar → { scope: "day-time",
+ *                             dayIdx, time }          many per trip
+ *   - Flight → { scope: "per-person",
+ *                ownerEmail, direction }              H3 reserved
+ *   - Transport → { scope: "leg", legKey }            H3 reserved
+ */
+export type SlotScope = "trip" | "day-time" | "per-person" | "leg";
+
+export type SlotStatus =
+  | "empty"        // no binding, no vote open
+  | "proposed"     // owner opened for ideas; candidates accumulating
+  | "voting"       // owner opened a vote; closes on owner action
+  | "locked"       // a Candidate is bound; itinerary renders it
+  | "booked";      // post-finalize (H3.3 state machine)
+
+export interface Slot {
+  id: string;
+  category: CandidateCategory;
+  scope: SlotScope;
+
+  /** scope: "day-time" */
+  dayIdx?: number;
+  time?: string;
+
+  /** scope: "per-person" (H3 reserved) */
+  ownerEmail?: string;
+  direction?: "outbound" | "return";
+
+  /** scope: "leg" (H3 reserved) */
+  legKey?: string;
+
+  /** Label shown on the card when no binding yet, e.g.
+   *  "Saturday 7 PM dinner". */
+  label?: string;
+
+  status: SlotStatus;
+
+  /** Set when status === "locked" | "booked". */
+  boundCandidateId?: string;
+
+  /** Set when status === "voting" (or kept historical if closed+locked). */
+  voteCandidateIds?: string[];
+  voteOpenedAt?: string;
+  voteClosedAt?: string;
+
+  createdBy: string;
+  createdAt: string;
 }

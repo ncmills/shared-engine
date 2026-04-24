@@ -19,6 +19,12 @@ export {
   handleSlotClose,
 } from "./slot";
 export {
+  handleAddCandidate,
+  handleBindSlot,
+  handleOpenCategoryVote,
+  handleOpenSlotForIdeas,
+} from "./pool";
+export {
   handlePlaceholderPost,
   handlePlaceholderPut,
   handlePlaceholderDelete,
