@@ -26,3 +26,5 @@ export * from "./hooks";
 export * from "./itemized-budget";
 export * from "./viewmodel";
 export * from "./expenses";
+export * from "./email-parsers";
+export * from "./email-ingest";
