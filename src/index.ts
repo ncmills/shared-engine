@@ -1,4 +1,5 @@
 export * from './types';
+export * from './hero-moment-validator';
 export * from './brand-config';
 export * from './pricing';
 export * from './stats';
