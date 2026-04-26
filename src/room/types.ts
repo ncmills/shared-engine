@@ -173,6 +173,14 @@ export interface RoomStoredPlan {
   placeholders?: PlaceholderItem[];
   externalBookings?: ExternalBooking[];
   scheduleOverrides?: Record<string, { dayIdx: number; time: string }>;
+  /**
+   * Owner-removed items (by item_path). The viewmodel + repo schedule
+   * builder skip any slot whose itemPath appears here, hiding it from
+   * the day-organized board without mutating the engine-generated
+   * `tierPlan.activities | dining | bars | schedule` arrays. Empty /
+   * undefined = no removals.
+   */
+  removedItems?: string[];
   stage?: string;
   lockedTier?: LockedTier;
   lockedTierAt?: string;

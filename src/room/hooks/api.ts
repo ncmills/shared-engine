@@ -85,7 +85,12 @@ export const roomApi = {
     dayIdx?: number;
     time?: string;
     unset?: boolean;
-  }): Promise<{ ok: boolean; scheduleOverrides: RoomStoredPlan["scheduleOverrides"] }> {
+    remove?: boolean;
+  }): Promise<{
+    ok: boolean;
+    scheduleOverrides: RoomStoredPlan["scheduleOverrides"];
+    removedItems?: RoomStoredPlan["removedItems"];
+  }> {
     return postJson("/api/room/schedule", args);
   },
 
