@@ -137,6 +137,64 @@ export function validateHeroMoment(
 }
 
 /**
+ * Optional LLM-judge fallback for hero-moment validation.
+ *
+ * Engine stays framework-agnostic — the consumer provides a `judge`
+ * function that returns `{ ok, reason }` for a borderline heroMoment.
+ * Adapter callers wire this to Haiku 4.5 (or any other model) and
+ * decide when to invoke it based on observed `degraded:true` rate.
+ *
+ * The judge ONLY runs when regex validation FAILS — never costs an
+ * API call on success. Returns the original regex result if no judge
+ * is provided or the judge throws.
+ */
+export interface HeroMomentJudgeInput {
+  heroMoment: HeroMoment;
+  regexReasons: string[];
+}
+export interface HeroMomentJudgeResult {
+  ok: boolean;
+  reason?: string;
+}
+export type HeroMomentJudge = (input: HeroMomentJudgeInput) => Promise<HeroMomentJudgeResult>;
+
+export interface HeroMomentValidationResultWithJudge extends HeroMomentValidationResult {
+  /** Set when the judge overrode regex (true=judge passed, false=judge upheld regex). */
+  judgeOverrode?: boolean;
+  /** Judge's verbatim reason (for telemetry). */
+  judgeReason?: string;
+}
+
+export async function validateHeroMomentWithJudge(
+  h: HeroMoment | undefined | null,
+  judge?: HeroMomentJudge,
+): Promise<HeroMomentValidationResultWithJudge> {
+  const regex = validateHeroMoment(h);
+  if (regex.ok || !judge || !h) return regex;
+  try {
+    const verdict = await judge({ heroMoment: h, regexReasons: regex.reasons });
+    if (verdict.ok) {
+      // Judge override — promote to ok=true, keep regex reasons in case ops wants to see why regex flagged.
+      return {
+        ok: true,
+        reasons: regex.reasons,
+        score: regex.score,
+        judgeOverrode: true,
+        judgeReason: verdict.reason,
+      };
+    }
+    return {
+      ...regex,
+      judgeOverrode: false,
+      judgeReason: verdict.reason,
+    };
+  } catch {
+    // Judge errored — fall back to regex verdict, don't crash the tier.
+    return regex;
+  }
+}
+
+/**
  * Build a corrective message to inject on retry when validation fails.
  * Used by the generate-plan route to give Claude one more shot before
  * tagging the tier `degraded: true`.

@@ -108,8 +108,57 @@ for (const c of cases) {
   if (!ok) failed += 1;
 }
 
+// ── LLM-judge fallback fixtures ──
+// Verifies validateHeroMomentWithJudge: regex-pass short-circuits judge,
+// regex-fail with judge=ok overrides to ok=true, regex-fail with judge=fail
+// keeps fail, judge throw falls back to regex result.
+const { validateHeroMomentWithJudge } = await import("../src/hero-moment-validator.ts");
+
+const passingHero = cases[0].h; // Capt. Nick swordfish — regex passes
+const failingHero = cases[4].h; // dinner downtown — regex fails
+
+let judgeCalled = 0;
+const yesJudge = async () => { judgeCalled += 1; return { ok: true, reason: "looked specific to me" }; };
+const noJudge = async () => { judgeCalled += 1; return { ok: false, reason: "still generic" }; };
+const throwJudge = async () => { judgeCalled += 1; throw new Error("simulated judge crash"); };
+
+// 1. Regex passes → judge never called
+judgeCalled = 0;
+const r1 = await validateHeroMomentWithJudge(passingHero, yesJudge);
+const r1ok = r1.ok === true && judgeCalled === 0 && r1.judgeOverrode === undefined;
+console.log(`${r1ok ? "✓" : "✗"} regex-pass short-circuits judge — ok=${r1.ok}, judgeCalls=${judgeCalled}`);
+if (!r1ok) failed += 1;
+
+// 2. Regex fails + judge=yes → override to ok=true
+judgeCalled = 0;
+const r2 = await validateHeroMomentWithJudge(failingHero, yesJudge);
+const r2ok = r2.ok === true && r2.judgeOverrode === true && r2.judgeReason === "looked specific to me" && judgeCalled === 1;
+console.log(`${r2ok ? "✓" : "✗"} regex-fail + judge=yes overrides to ok=true — ok=${r2.ok}, override=${r2.judgeOverrode}`);
+if (!r2ok) failed += 1;
+
+// 3. Regex fails + judge=no → stays failed (with judgeReason logged)
+judgeCalled = 0;
+const r3 = await validateHeroMomentWithJudge(failingHero, noJudge);
+const r3ok = r3.ok === false && r3.judgeOverrode === false && r3.judgeReason === "still generic" && judgeCalled === 1;
+console.log(`${r3ok ? "✓" : "✗"} regex-fail + judge=no upholds fail — ok=${r3.ok}, override=${r3.judgeOverrode}`);
+if (!r3ok) failed += 1;
+
+// 4. Judge throws → fall back to regex result, no crash
+judgeCalled = 0;
+const r4 = await validateHeroMomentWithJudge(failingHero, throwJudge);
+const r4ok = r4.ok === false && judgeCalled === 1;
+console.log(`${r4ok ? "✓" : "✗"} judge throws → falls back to regex without crash — ok=${r4.ok}`);
+if (!r4ok) failed += 1;
+
+// 5. No judge provided → regex result unchanged
+judgeCalled = 0;
+const r5 = await validateHeroMomentWithJudge(failingHero);
+const r5ok = r5.ok === false && r5.judgeOverrode === undefined && judgeCalled === 0;
+console.log(`${r5ok ? "✓" : "✗"} no judge supplied → regex result unchanged — ok=${r5.ok}`);
+if (!r5ok) failed += 1;
+
 if (failed > 0) {
-  console.error(`\n${failed} of ${cases.length} fixtures wrong.`);
+  console.error(`\n${failed} of ${cases.length + 5} fixtures wrong.`);
   process.exit(1);
 }
-console.log(`\nAll ${cases.length} hero-moment fixtures pass.`);
+console.log(`\nAll ${cases.length + 5} hero-moment fixtures pass (${cases.length} regex + 5 judge).`);
