@@ -49,6 +49,13 @@ export interface AtlasEntry {
   narrative: string;
   /** Optional named operator/lodge/captain hinted from the entry. */
   namedOperators?: string[];
+  /**
+   * Phase 9c — audiences this entry serves. When absent or empty, the engine
+   * treats the entry as universal (does not filter out). Adapters project
+   * the per-repo `AtlasAudience[]` field here; consumers tag cross-applicable
+   * entries with both audiences (e.g. `["bachelor", "bachelorette"]`).
+   */
+  audiences?: ("bachelor" | "bachelorette")[];
 }
 
 /**
@@ -73,6 +80,13 @@ export interface RetrievalQuery {
    * but does NOT contribute to geoSignal — confidence still gates on geo.
    */
   categoryHints?: string[];
+  /**
+   * Phase 9c — brand audience filter. When set, drop entries whose
+   * `audiences` array doesn't include this value. Entries with no
+   * `audiences` field (or empty) are treated as universal and pass.
+   * Adapters set this to their brand's audience id.
+   */
+  audience?: "bachelor" | "bachelorette";
 }
 
 export interface RetrievalHit {
@@ -133,6 +147,14 @@ export function scoreAtlas(query: RetrievalQuery, atlas: AtlasEntry[]): Retrieva
 
   const hits: RetrievalHit[] = [];
   for (const entry of atlas) {
+    // Phase 9c — audience filter. When the query specifies an audience and
+    // the entry tags audiences, the entry must include this audience.
+    // Untagged or empty audiences[] = universal — passes either way so the
+    // ~95% of entries not yet labeled stay in the candidate pool.
+    if (query.audience && entry.audiences && entry.audiences.length > 0) {
+      if (!entry.audiences.includes(query.audience)) continue;
+    }
+
     let score = 0;
     let geoSignal = 0;
     const reasons: string[] = [];

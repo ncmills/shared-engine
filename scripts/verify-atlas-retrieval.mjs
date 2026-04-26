@@ -268,6 +268,34 @@ console.log(
 );
 if (marfaCount !== 1) failed += 1;
 
+// Phase 9c audience filter: query audience=bachelorette must drop a
+// bachelor-only entry; untagged entries pass; cross-tagged entries pass.
+const audienceAtlas = [
+  { ...atlas[0], id: "bachelor-only", audiences: ["bachelor"] },          // boar hunt
+  { ...atlas[2], id: "bachelorette-only", audiences: ["bachelorette"] },  // tarpon flat
+  { ...atlas[4], id: "cross-tagged", audiences: ["bachelor", "bachelorette"] }, // dog sled
+  { ...atlas[3], id: "untagged" },                                        // bonneville (no audiences)
+];
+const audienceQuery = {
+  destination: "anywhere",
+  monthIndex: 6,
+  groupSize: 6,
+  tier: "theLegend",
+  vibeTags: [],
+  audience: "bachelorette",
+};
+const audienceHits = scoreAtlas(audienceQuery, audienceAtlas);
+const audienceIds = new Set(audienceHits.map((h) => h.entry.id));
+const droppedBachelorOnly = !audienceIds.has("bachelor-only");
+const keptCrossTagged = audienceIds.has("cross-tagged");
+const keptBacheloretteOnly = audienceIds.has("bachelorette-only");
+const keptUntagged = audienceIds.has("untagged");
+const audOk = droppedBachelorOnly && keptCrossTagged && keptBacheloretteOnly && keptUntagged;
+console.log(
+  `${audOk ? "✓" : "✗"} audience=bachelorette filter — dropped(bachelor-only)=${droppedBachelorOnly}, kept(cross-tagged)=${keptCrossTagged}, kept(bachelorette-only)=${keptBacheloretteOnly}, kept(untagged)=${keptUntagged}`,
+);
+if (!audOk) failed += 1;
+
 if (failed > 0) {
   console.error(`\n${failed} fixtures wrong.`);
   process.exit(1);
