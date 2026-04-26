@@ -66,6 +66,13 @@ export interface RetrievalQuery {
   tier: "weekendWarrior" | "theLegend" | "theKing";
   /** Wizard vibe tags (brand-specific vocabulary; matched as Jaccard set overlap). */
   vibeTags: string[];
+  /**
+   * Personalization hints derived from non-geo wizard inputs (groomType,
+   * bridePersonality, hobbies, selected activities). Adapter-projected into
+   * the same vocabulary as `entry.categoryTags`. Scored as Jaccard overlap
+   * but does NOT contribute to geoSignal — confidence still gates on geo.
+   */
+  categoryHints?: string[];
 }
 
 export interface RetrievalHit {
@@ -105,12 +112,13 @@ function jaccard(a: Set<string>, b: Set<string>): number {
  * descending score (caller then runs `topK` for diversity-aware trim).
  *
  * Scoring (weighted sum):
- *  - regionKey exact match            +50
- *  - destination token overlap        +30 max (Jaccard scaled)
- *  - season fit (monthIndex ∈ season) +15
- *  - groupSize within [min, max]      +10  (partial ±2: +5)
- *  - tier↔budgetBucket alignment      +10  (adjacent: +5)
- *  - vibeTags ∩ categoryTags Jaccard  +20 max
+ *  - regionKey exact match              +50
+ *  - destination token overlap          +30 max (Jaccard scaled)
+ *  - season fit (monthIndex ∈ season)   +15
+ *  - groupSize within [min, max]        +10  (partial ±2: +5)
+ *  - tier↔budgetBucket alignment        +10  (adjacent: +5)
+ *  - vibeTags ∩ categoryTags Jaccard    +20 max
+ *  - categoryHints ∩ categoryTags Jacc. +15 max (non-geo personalization)
  *
  * Confidence thresholds:
  *  - score ≥ 50 → "exact"
@@ -181,6 +189,19 @@ export function scoreAtlas(query: RetrievalQuery, atlas: AtlasEntry[]): Retrieva
       reasons.push(`vibe-overlap=${vibeSim.toFixed(2)} (+${add})`);
     }
 
+    // Personalization hints (groomType / bridePersonality / hobbies /
+    // activities → atlas categoryTags vocabulary). Non-geo signal, so it
+    // contributes to score and ordering but never to geoSignal/confidence.
+    if (query.categoryHints && query.categoryHints.length > 0) {
+      const hintSet = new Set(query.categoryHints.map((t) => t.toLowerCase()));
+      const hintSim = jaccard(hintSet, entryVibeSet);
+      if (hintSim > 0) {
+        const add = Math.round(hintSim * 15);
+        score += add;
+        reasons.push(`category-hints=${hintSim.toFixed(2)} (+${add})`);
+      }
+    }
+
     // Confidence is gated on geographic signal, not raw score. A perfect
     // tier-and-group-fit against an entry on the other side of the country
     // should never claim "nearest" — that misleads the prompt grounder.
@@ -209,10 +230,14 @@ export function scoreAtlas(query: RetrievalQuery, atlas: AtlasEntry[]): Retrieva
 }
 
 /**
- * Pick top K hits with a diversity penalty: drop a hit if it shares both
- * regionKey AND categoryTags overlap >= 50% with an already-picked hit.
- * Prevents three nearly-identical Hill Country boar trips outranking a
- * single boar + a Bonneville + an Apalachicola.
+ * Pick top K hits with two diversity guards:
+ *  1. Destination-level dedup: drop a hit if its `entry.destination` exactly
+ *     matches an already-picked hit. Prevents two trips to the same town
+ *     with different category framings (e.g. two Marfa entries).
+ *  2. Region+category overlap: drop a hit if it shares regionKey AND
+ *     categoryTags overlap >= 50% with an already-picked hit. Prevents
+ *     three nearly-identical Hill Country boar trips outranking a single
+ *     boar + a Bonneville + an Apalachicola.
  *
  * Hits below 10 (confidence "none") are filtered out — caller handles
  * the no-match path separately via `nearestRegion` + free-generation.
@@ -221,6 +246,10 @@ export function topK(hits: RetrievalHit[], k: number): RetrievalHit[] {
   const out: RetrievalHit[] = [];
   for (const hit of hits) {
     if (hit.score < 10) break; // hits is sorted desc; bail early
+    const sameDestination = out.some(
+      (picked) => picked.entry.destination === hit.entry.destination,
+    );
+    if (sameDestination) continue;
     const dup = out.some((picked) => {
       if (picked.entry.regionKey !== hit.entry.regionKey) return false;
       const a = new Set(hit.entry.categoryTags.map((t) => t.toLowerCase()));
