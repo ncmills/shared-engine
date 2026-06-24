@@ -17,6 +17,8 @@
  *   acquisition_log        — fires on first session pageview with q/referrer
  */
 
+import { readVid } from "./vid";
+
 export type SignalTable =
   | "plan_inputs"
   | "surprise_me_actions"
@@ -80,6 +82,52 @@ export function logSignal(table: SignalTable, payload: SignalPayload): void {
   } catch {
     // Total fallthrough — never break UX for analytics.
   }
+}
+
+/**
+ * Client-side read of the first-party `vid` cookie (see vid.ts). Returns null
+ * on the server or when the cookie is absent/malformed. Every client emit
+ * threads this so behavior rows join to the visitor; the /api/signals route
+ * also backfills it from the request cookie as a safety net.
+ */
+export function getVid(): string | null {
+  if (typeof document === "undefined") return null;
+  return readVid(document.cookie);
+}
+
+// ── A3: thin, fire-and-forget client emit helpers ───────────────────────
+// Each wraps logSignal, auto-attaches the vid, and never awaits/throws. The
+// /api/signals allow-list already permits these tables.
+
+/** A wizard/builder option toggle. `slot` is the field/category, `optionId`
+ *  the chosen value. `action` distinguishes pick vs un-pick. `dwellMs` is the
+ *  optional time the user spent on the step before this action. */
+export function logSelection(
+  brand: Brand,
+  data: { slot: string; optionId?: string; action: "add" | "remove"; dwellMs?: number }
+): void {
+  logSignal("plan_selections", { brand, vid: getVid() ?? undefined, ...data });
+}
+
+/** A pin/save of an itinerary item. */
+export function logBookmark(
+  brand: Brand,
+  data: { planId?: string; itemId: string; action: "add" | "remove" }
+): void {
+  logSignal("plan_bookmarks", { brand, vid: getVid() ?? undefined, ...data });
+}
+
+/** First-pageview acquisition beacon (referrer / UTM / coarse device). */
+export function logAcquisition(
+  brand: Brand,
+  data: {
+    ref?: string;
+    utm?: Record<string, string>;
+    device?: string;
+    landing?: string;
+  }
+): void {
+  logSignal("acquisition_log", { brand, vid: getVid() ?? undefined, ...data });
 }
 
 /**
