@@ -51,6 +51,14 @@ export function resolveSignalTableName(table: SignalTable): string {
 
 export interface SignalPayload {
   brand: Brand;
+  /**
+   * First-party visitor id (see vid.ts). The join key across behavior /
+   * plans / leads. NOT PII — an opaque random UUID — so it is intentionally
+   * absent from stripPII()'s banned set and survives scrubbing. Callers
+   * should include it on every emit; the /api/signals route also backfills
+   * it from the request cookie when missing.
+   */
+  vid?: string;
   [key: string]: unknown;
 }
 
