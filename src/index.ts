@@ -13,4 +13,5 @@ export * from './hobbies';
 export * from './signals';
 export * from './vid';
 export * from './derive';
+export * from './lead-profile';
 export * from './room';
