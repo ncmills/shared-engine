@@ -29,7 +29,7 @@ export type SignalTable =
   | "trip_room_activity"
   | "acquisition_log";
 
-export type Brand = "moh" | "bestman" | "tdf";
+export type Brand = "moh" | "bestman" | "tdf" | "offsite" | "handicaphq";
 
 /**
  * Map the public SignalTable name (client-facing, stable) to the physical
