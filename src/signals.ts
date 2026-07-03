@@ -140,18 +140,23 @@ export function logAcquisition(
  */
 export function stripPII<T extends Record<string, unknown>>(payload: T): T {
   const banned = new Set([
-    "email", "organizerEmail", "organizerName",
-    "authPassword", "password",
-    "specialRequests", // freeform; could carry contact info
+    // existing shared-engine banned set
+    "email", "organizerEmail", "organizerName", "authPassword", "password", "specialRequests",
+    // HHQ superset
+    "attendeeEmail", "attendeeEmails", "ip", "ipAddress", "ssn",
+    "address", "streetAddress", "attendees", "attendeeNames", "phone",
   ]);
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(payload)) {
-    if (banned.has(k)) continue;
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      out[k] = stripPII(v as Record<string, unknown>);
-    } else {
-      out[k] = v;
+  const scrub = (val: unknown): unknown => {
+    if (Array.isArray(val)) return val.map(scrub);
+    if (val && typeof val === "object") {
+      const o: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        if (banned.has(k)) continue;
+        o[k] = scrub(v);
+      }
+      return o;
     }
-  }
-  return out as T;
+    return val;
+  };
+  return scrub(payload) as T;
 }
