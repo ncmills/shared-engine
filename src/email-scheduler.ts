@@ -71,15 +71,40 @@ export interface ScheduleWelcomeSequenceArgs {
  * table. Ported from HHQ's `scheduleWelcomeSequence`: same email
  * normalization guard, same idempotent upsert. See file header for the
  * `template`/`vid` DB-shape discrepancy vs the task brief.
+ *
+ * WS4 DEPENDENCY: the live `wp_email_schedule` (and `wp_leads`) `brand` CHECK
+ * constraint currently allows only `('moh', 'bestman', 'tdf')`. Calling this
+ * with `brand: 'offsite'` or `brand: 'handicaphq'` will be rejected by the DB
+ * until WS4 widens that constraint — WS4 must land before Offsite Outpost or
+ * Handicap HQ can call this function.
+ *
+ * FAILS LOUD, ON PURPOSE (Nick hard rule — no silent failures in shared
+ * libraries): every row's `step` is validated against the table's
+ * `CHECK (sequence_step BETWEEN 1 AND 10)` *before* any I/O, and any Supabase
+ * upsert error is thrown rather than logged-and-swallowed. It is the
+ * caller's job (e.g. the WS1/WS2 lead-capture routes) to decide whether to
+ * catch and log — this library will never hide a failure from its caller.
  */
 export async function scheduleWelcomeSequence(
   supabase: SupabaseClient,
   args: ScheduleWelcomeSequenceArgs
-): Promise<void> {
+): Promise<{ scheduled: number }> {
   // Ported from HHQ: normalize + guard against empty/malformed email before
   // ever touching the DB.
   const email = args.email.trim().toLowerCase();
-  if (!email || !email.includes("@")) return;
+  if (!email || !email.includes("@")) return { scheduled: 0 };
+
+  // Validate BEFORE the upsert: `sequence_step` is 1-based (matches every
+  // real producer — HHQ/MOH use `idx + 1`, BMHQ uses `1..5`) and the DB has
+  // `CHECK (sequence_step BETWEEN 1 AND 10)`. A single out-of-range step
+  // (e.g. a caller passing a 0-based `step`) would otherwise get the WHOLE
+  // upsert batch rejected by Postgres — fail fast, in-process, with a clear
+  // message instead of a batch-wide DB rejection.
+  for (const item of args.sequence) {
+    if (!Number.isInteger(item.step) || item.step < 1 || item.step > 10) {
+      throw new Error(`email-scheduler: step must be 1..10, got ${item.step}`);
+    }
+  }
 
   const rows = buildWelcomeSchedule(args.sequence, args.nowIso);
   const dbRows = rows.map((row) => ({
@@ -89,18 +114,20 @@ export async function scheduleWelcomeSequence(
     send_at: row.send_at,
   }));
 
-  try {
-    // onConflict + ignoreDuplicates preserved from HHQ (see file header) —
-    // leaves an already-seeded row (and its sent_at) untouched rather than
-    // resetting it when a lead resubmits.
-    const { error } = await supabase.from("wp_email_schedule").upsert(dbRows, {
-      onConflict: "email,brand,sequence_step",
-      ignoreDuplicates: true,
-    });
-    if (error) {
-      console.warn("[email-scheduler] upsert error:", error.message);
-    }
-  } catch (err) {
-    console.warn("[email-scheduler] upsert threw:", err);
+  // onConflict + ignoreDuplicates preserved from HHQ (see file header) —
+  // leaves an already-seeded row (and its sent_at) untouched rather than
+  // resetting it when a lead resubmits.
+  const { error } = await supabase.from("wp_email_schedule").upsert(dbRows, {
+    onConflict: "email,brand,sequence_step",
+    ignoreDuplicates: true,
+  });
+  if (error) {
+    // THROW — do not console.warn-and-continue. Swallowing this here would
+    // hide a real production failure (e.g. the brand CHECK rejecting
+    // 'offsite'/'handicaphq' pre-WS4) from every caller. The caller decides
+    // whether to catch+log; that is not this library's job to hide.
+    throw new Error(`email-scheduler: upsert failed: ${error.message}`);
   }
+
+  return { scheduled: dbRows.length };
 }
