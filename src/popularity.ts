@@ -139,8 +139,12 @@ export async function getAllPopularityScores(
 }
 
 /**
- * Capped ranking nudge, matching the `+10` bonus HHQ's query.ts applies
- * during destination scoring (score += Math.min(rawScore, cap)).
+ * Capped ranking nudge. NOTE: this is a simplified nudge, NOT HHQ's actual
+ * ranking bonus. HHQ's real formula (handicap-hq/src/data/query.ts) is
+ * `viewCount >= 10 ? Math.min(Math.round(popularity * 10), 10) : 0` — it gates
+ * on a 10-impression minimum and scales the 0..1 ratio by 10. This helper omits
+ * both. Reconcile this formula against query.ts when wiring popularity into
+ * ranking in WS2/WS3 before relying on the magnitude.
  */
 export function popularityBonus(scores: Map<string, number>, destinationId: string, cap = 10): number {
   const raw = scores.get(destinationId);

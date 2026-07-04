@@ -131,10 +131,13 @@ export function logAcquisition(
 }
 
 /**
- * Strip PII from any payload before it's persisted long-term. Email +
- * organizer name + freeform text fields that could carry contact info
- * are removed. The corresponding session_id (set server-side from a
- * rolling daily hash of IP + UA) is the analytic identifier.
+ * Strip PII from any payload before it's persisted long-term. Removes a
+ * 16-key PII superset: email, organizerEmail, organizerName, authPassword,
+ * password, specialRequests, attendeeEmail, attendeeEmails, ip, ipAddress,
+ * ssn, address, streetAddress, attendees, attendeeNames, phone. Recurses
+ * into both nested objects and array elements; `vid` is intentionally NOT
+ * stripped (it is the join key). The corresponding session_id (set server-side
+ * from a rolling daily hash of IP + UA) is the analytic identifier.
  *
  * Pure helper — exported for use in /api/signals route handlers.
  */
