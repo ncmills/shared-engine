@@ -10,4 +10,7 @@ export interface RedisLike {
   expire(key: string, seconds: number): Promise<unknown>;
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ...args: (string | number)[]): Promise<unknown>;
+  /** Added for priors-builder.ts (Task 5): batch-read the `plan:*` keys a
+   *  `scan` cursor turns up, mirroring ioredis's `mget(...keys)`. */
+  mget(...keys: string[]): Promise<(string | null)[]>;
 }

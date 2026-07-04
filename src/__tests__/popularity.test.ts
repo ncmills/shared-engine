@@ -27,6 +27,7 @@ function fakeRedis(
       cacheStore.value = value;
       return "OK";
     },
+    async mget() { return []; },
   };
 }
 
@@ -54,6 +55,7 @@ describe("popularity", () => {
       async expire() { return 1; },
       async get() { return null; },
       async set() { return "OK"; },
+      async mget() { return []; },
     };
     await recordDestinationView(r, "austin", { region: "south", budget: "mid" });
     expect(calls).toContainEqual(["signal:views:austin", "total", 1]);

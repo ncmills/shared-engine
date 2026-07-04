@@ -7,6 +7,7 @@ export * from './stats';
 export * from './trip-terms-validator';
 export * from './analytics';
 export * from './priors';
+export * from './priors-builder';
 export * from './surprise-me';
 export * from './json-repair';
 export * from './hobbies';
