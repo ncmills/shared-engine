@@ -60,7 +60,7 @@ export function parseAcquisition(
     if (v) utm[k] = v;
   }
 
-  const device: "mobile" | "desktop" = /iphone|android|mobile/i.test(ua) ? "mobile" : "desktop";
+  const device: "mobile" | "desktop" = /Mobi|Android|iPhone|iPad|iPod/i.test(ua) ? "mobile" : "desktop";
 
   let source = utm.utm_source;
   if (!source && referrer) {

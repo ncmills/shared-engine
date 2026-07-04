@@ -14,4 +14,8 @@ describe("parseAcquisition", () => {
     expect(out.source).toContain("ycombinator");
     expect(out.device).toBe("desktop");
   });
+  it("classifies iPad as mobile", () => {
+    const out = parseAcquisition(new URLSearchParams(""), "", "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)");
+    expect(out.device).toBe("mobile");
+  });
 });
