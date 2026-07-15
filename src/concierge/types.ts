@@ -1,6 +1,9 @@
 export type CurrencyCode = "USD";
 export type BookingCategory = "lodging" | "activity" | "dining" | "golf";
 
+// OO ('offsite') and 'tdf' are intentionally NOT concierge tenants — unrepresentable.
+export type ConciergeTenant = "moh" | "bestman" | "handicaphq";
+
 export interface CancellationPolicy {
   refundable: boolean;
   /** ISO8601 UTC deadline for a free cancel, or null if non-refundable / N/A */
@@ -37,7 +40,7 @@ export interface ManifestItem {
 
 export interface BookingManifest {
   tripId: string;
-  tenant: string;
+  tenant: ConciergeTenant;
   items: ManifestItem[];
 }
 

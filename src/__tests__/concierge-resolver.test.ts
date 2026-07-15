@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveDining, DeterministicProposalSource, validateChoice } from "../concierge/resolver";
+import { resolveDining, DeterministicProposalSource, validateChoice, type ProposalSource } from "../concierge/resolver";
 import { MockRail } from "../concierge/mock-rail";
 import type { BookingIntent } from "../concierge/types";
 
@@ -38,5 +38,35 @@ describe("resolveDining", () => {
       proposals: new DeterministicProposalSource(),
     });
     expect(manifest.items[0]!.chosen).toBeNull();
+  });
+
+  it("rejects a fabricated slot the rail never returned (provenance guard)", async () => {
+    const hallucinating: ProposalSource = {
+      async rank() {
+        return [
+          { railSlotId: "FAKE-999", label: "hallucinated", priceCents: 0, startsAt: "2026-08-01T19:00:00Z", cancellation: { refundable: true, freeCancelUntil: null, refundAmountCents: 0 } },
+        ];
+      },
+    };
+    const manifest = await resolveDining({
+      tripId: "trip-3",
+      tenant: "moh",
+      intents,
+      rail: new MockRail(),
+      proposals: hallucinating,
+    });
+    expect(manifest.items[0]!.chosen).toBeNull();
+  });
+
+  it("throws when a non-dining intent reaches resolveDining", async () => {
+    await expect(
+      resolveDining({
+        tripId: "trip-4",
+        tenant: "moh",
+        intents: [{ itemId: "g", category: "golf", query: { area: "A", dateTime: "2026-08-01T12:00:00Z", partySize: 4 } }],
+        rail: new MockRail(),
+        proposals: new DeterministicProposalSource(),
+      }),
+    ).rejects.toThrow(/non-dining/);
   });
 });

@@ -1,11 +1,11 @@
 import { MockRail } from "./mock-rail";
 import { resolveDining, DeterministicProposalSource } from "./resolver";
 import { Orchestrator, InMemoryBookingStore } from "./orchestrator";
-import type { BookingIntent, BookingManifest, BookingResult } from "./types";
+import type { BookingIntent, BookingManifest, BookingResult, ConciergeTenant } from "./types";
 
 export interface DryRunArgs {
   tripId: string;
-  tenant: string;
+  tenant: ConciergeTenant;
   intents: BookingIntent[];
 }
 

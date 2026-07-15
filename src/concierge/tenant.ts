@@ -1,7 +1,6 @@
-import type { BookingCategory, CurrencyCode } from "./types";
+import type { BookingCategory, CurrencyCode, ConciergeTenant } from "./types";
 
-// OO ('offsite') and 'tdf' are intentionally NOT concierge tenants.
-export type ConciergeTenant = "moh" | "bestman" | "handicaphq";
+export type { ConciergeTenant } from "./types";
 
 export interface ConciergeTenantConfig {
   tenant: ConciergeTenant;
