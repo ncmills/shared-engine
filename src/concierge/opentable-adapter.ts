@@ -59,6 +59,10 @@ export class OpenTableAdapter implements BookingRail {
     return { refundAmountCents: 0 };
   }
 
+  async release(holdRef: string): Promise<void> {
+    await this.req(`/v2/slot_locks/${holdRef}`, { method: "DELETE" });
+  }
+
   async status(railRef: string): Promise<BookingStatus> {
     const data = await this.req(`/v2/reservations/${railRef}`);
     return data.status === "confirmed" ? "confirmed" : data.status === "cancelled" ? "cancelled" : "pending";

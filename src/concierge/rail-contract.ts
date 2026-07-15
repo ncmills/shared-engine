@@ -26,5 +26,12 @@ export function runBookingRailContract(name: string, makeRail: () => BookingRail
       const refund = await rail.cancel(booked.railRef);
       expect(typeof refund.refundAmountCents).toBe("number");
     });
+
+    it("hold -> release (an uncommitted hold can be dropped)", async () => {
+      const rail = makeRail();
+      const slot = (await rail.search(q))[0]!;
+      const held = await rail.hold(slot.railSlotId, { partySize: 4, dateTime: slot.startsAt });
+      await expect(rail.release(held.holdRef)).resolves.toBeUndefined();
+    });
   });
 }

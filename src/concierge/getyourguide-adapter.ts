@@ -67,6 +67,10 @@ export class GetYourGuideAdapter implements BookingRail {
     return { refundAmountCents: data.refund_cents ?? 0 };
   }
 
+  async release(holdRef: string): Promise<void> {
+    await this.req(`/1/reservations/${holdRef}`, { method: "DELETE" });
+  }
+
   async status(railRef: string): Promise<BookingStatus> {
     const data = await this.req(`/1/bookings/${railRef}`);
     return data.status === "confirmed" ? "confirmed" : data.status === "cancelled" ? "cancelled" : "pending";

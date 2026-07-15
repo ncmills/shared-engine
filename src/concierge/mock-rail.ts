@@ -20,10 +20,14 @@ export interface MockRailOpts {
   failBookFor?: string[];
   /** Slot ids whose cancel should throw — simulates a rail that fails to compensate. */
   failCancelFor?: string[];
+  /** Slot ids whose release should throw — simulates a rail that fails to drop a hold. */
+  failReleaseFor?: string[];
   /** >0 makes this a paid (activity-style) rail with a refundable policy. */
   priceCents?: number;
   /** Override the hold expiry; a past ISO simulates an already-expired hold. */
   holdExpiresAt?: string;
+  /** Per-slot hold expiry override (wins over holdExpiresAt) — lets tests set distinct TTLs. */
+  holdExpiresBySlot?: Record<string, string>;
   /** What cancel refunds; defaults to priceCents. */
   refundAmountCents?: number;
 }
@@ -64,7 +68,7 @@ export class MockRail implements BookingRail {
     this.holdToSlot.set(holdRef, railSlotId);
     return {
       holdRef,
-      expiresAt: this.opts.holdExpiresAt ?? FAR_FUTURE,
+      expiresAt: this.opts.holdExpiresBySlot?.[railSlotId] ?? this.opts.holdExpiresAt ?? FAR_FUTURE,
       slot: {
         railSlotId,
         label: railSlotId,
@@ -92,6 +96,14 @@ export class MockRail implements BookingRail {
     }
     this.booked.delete(railRef);
     return { refundAmountCents: this.opts.refundAmountCents ?? this.opts.priceCents ?? 0 };
+  }
+
+  async release(holdRef: string): Promise<void> {
+    const slotId = this.holdToSlot.get(holdRef) ?? holdRef.replace(/^hold-/, "");
+    if (this.opts.failReleaseFor?.includes(slotId)) {
+      throw new Error(`MockRail: release refused for ${holdRef}`);
+    }
+    this.holdToSlot.delete(holdRef);
   }
 
   async status(railRef: string): Promise<BookingStatus> {

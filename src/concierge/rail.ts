@@ -28,5 +28,8 @@ export interface BookingRail {
   hold(railSlotId: string, ctx: { partySize: number; dateTime: string }): Promise<HoldResult>;
   book(holdRef: string, ctx: { leadName: string; leadEmail: string }): Promise<BookResult>;
   cancel(railRef: string): Promise<{ refundAmountCents: number }>;
+  /** Drop an uncommitted hold (no booking was made). Idempotent-friendly: releasing an
+   *  unknown/expired hold should resolve, not throw, where the rail allows. */
+  release(holdRef: string): Promise<void>;
   status(railRef: string): Promise<BookingStatus>;
 }
