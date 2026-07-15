@@ -43,13 +43,11 @@ export interface ResolveArgs {
 /** @deprecated alias kept for Phase 0 callers */
 export type ResolveDiningArgs = ResolveArgs;
 
-async function resolveForCategory(category: BookingCategory, args: ResolveArgs): Promise<BookingManifest> {
+/** Category-agnostic resolver: turns intents (any category) into a manifest against one rail,
+ *  applying the provenance guard + validateChoice per intent. */
+export async function resolveManifest(args: ResolveArgs): Promise<BookingManifest> {
   const items: ManifestItem[] = [];
   for (const intent of args.intents) {
-    // Fail loud if a mismatched category reaches this resolver.
-    if (intent.category !== category) {
-      throw new Error(`resolve for ${category} received non-${category} intent ${intent.itemId} (${intent.category})`);
-    }
     const candidates = await args.rail.search(intent.query);
     // Provenance guard: a chosen slot MUST be one the rail actually returned.
     // The proposer may reorder/filter candidates but can never inject a fabricated slot.
@@ -62,6 +60,16 @@ async function resolveForCategory(category: BookingCategory, args: ResolveArgs):
     items.push({ intent, candidates, chosen, rail: args.rail.railId });
   }
   return { tripId: args.tripId, tenant: args.tenant, items };
+}
+
+async function resolveForCategory(category: BookingCategory, args: ResolveArgs): Promise<BookingManifest> {
+  for (const intent of args.intents) {
+    // Fail loud if a mismatched category reaches a single-category resolver.
+    if (intent.category !== category) {
+      throw new Error(`resolve for ${category} received non-${category} intent ${intent.itemId} (${intent.category})`);
+    }
+  }
+  return resolveManifest(args);
 }
 
 export async function resolveDining(args: ResolveArgs): Promise<BookingManifest> {
