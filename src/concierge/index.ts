@@ -2,6 +2,7 @@ export * from "./types";
 export * from "./tenant";
 export * from "./rail";
 export * from "./audit";
+export * from "./caps";
 export * from "./mock-rail";
 export * from "./resolver";
 export * from "./orchestrator";

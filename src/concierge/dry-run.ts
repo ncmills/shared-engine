@@ -1,8 +1,9 @@
 import { MockRail } from "./mock-rail";
-import { resolveDining, resolveActivities, DeterministicProposalSource } from "./resolver";
+import { resolveDining, resolveActivities, resolveManifest, DeterministicProposalSource } from "./resolver";
 import { Orchestrator, InMemoryBookingStore } from "./orchestrator";
 import { InMemoryAuditLog } from "./audit";
-import type { SagaResult } from "./orchestrator";
+import type { SagaResult, StagedResult } from "./orchestrator";
+import type { SpendCaps } from "./caps";
 import type { AuditEntry } from "./audit";
 import type { BookingIntent, BookingManifest, BookingResult, ConciergeTenant } from "./types";
 
@@ -59,4 +60,36 @@ export async function runConciergeSagaDryRun(
     now: args.now,
   });
   return { manifest, saga, audit: await audit.entries(args.tripId) };
+}
+
+export interface StagedDryRunArgs {
+  tripId: string;
+  tenant: ConciergeTenant;
+  intents: BookingIntent[];
+  now: string; // ISO8601
+  priceCents?: number;
+  caps?: SpendCaps;
+}
+
+/** Wires resolveManifest + staged Orchestrator + paid MockRail + in-memory store + audit —
+ *  zero external calls. The CI-provable Phase 2a "hold-all → cap-check → commit-shortest-TTL-first
+ *  → unwind-on-failure" loop for a mixed lodging+activity itinerary. */
+export async function runConciergeStagedDryRun(
+  args: StagedDryRunArgs,
+): Promise<{ manifest: BookingManifest; staged: StagedResult; audit: AuditEntry[] }> {
+  const rail = new MockRail({ priceCents: args.priceCents ?? 8500 });
+  const manifest = await resolveManifest({
+    tripId: args.tripId,
+    tenant: args.tenant,
+    intents: args.intents,
+    rail,
+    proposals: new DeterministicProposalSource(),
+  });
+  const audit = new InMemoryAuditLog();
+  const staged = await new Orchestrator(rail, new InMemoryBookingStore(), audit).executeStaged(manifest, {
+    lead: { leadName: "Trip Lead", leadEmail: "lead@example.com" },
+    now: args.now,
+    caps: args.caps,
+  });
+  return { manifest, staged, audit: await audit.entries(args.tripId) };
 }
