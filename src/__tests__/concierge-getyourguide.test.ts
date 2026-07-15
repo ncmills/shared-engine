@@ -36,6 +36,15 @@ describe("GetYourGuideAdapter (mocked)", () => {
     expect(booked.confirmationCode).toBe("GYG-XYZ");
     expect(booked.amountCents).toBe(8500);
   });
+
+  it("release DELETEs the reservation (the hold, not the booking)", async () => {
+    const spy = fakeFetch();
+    const rail = new GetYourGuideAdapter({ baseUrl: "https://sandbox.getyourguide.test", token: "t", fetchImpl: spy });
+    await rail.release("gyg-res-1");
+    const call = (spy as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.find(([u]) => String(u).includes("/reservations/gyg-res-1"));
+    expect(call).toBeTruthy();
+    expect(call![1]!.method).toBe("DELETE");
+  });
 });
 
 runBookingRailContract("GetYourGuideAdapter(mock fetch)", make);

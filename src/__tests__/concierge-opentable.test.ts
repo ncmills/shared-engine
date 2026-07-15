@@ -25,6 +25,15 @@ describe("OpenTableAdapter (mocked)", () => {
     expect(slots[0]!.railSlotId).toBe("rest-1");
     expect(slots[0]!.priceCents).toBe(0);
   });
+
+  it("release DELETEs the slot_lock (not the reservation)", async () => {
+    const spy = fakeFetch();
+    const rail = new OpenTableAdapter({ baseUrl: "https://sandbox.opentable.test", token: "t", fetchImpl: spy });
+    await rail.release("lock-1");
+    const call = (spy as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.find(([u]) => String(u).includes("/slot_locks/lock-1"));
+    expect(call).toBeTruthy();
+    expect(call![1]!.method).toBe("DELETE");
+  });
 });
 
 runBookingRailContract("OpenTableAdapter(mock fetch)", make);

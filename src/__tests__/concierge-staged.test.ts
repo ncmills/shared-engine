@@ -72,6 +72,23 @@ describe("Orchestrator.executeStaged", () => {
     expect(await rail.status("ref-" + tourSlot)).toBe("cancelled"); // no orphan
   });
 
+  it("releases the FAILING item's own hold on a commit failure (no stuck hold)", async () => {
+    const probe = new MockRail({ priceCents: 8500 });
+    const manifest = await manifestFor(probe);
+    const staySlot = manifest.items[0]!.chosen!.railSlotId;
+    const tourSlot = manifest.items[1]!.chosen!.railSlotId;
+    // tour-1 commits first (sooner expiry); stay-1 then fails to book. stay-1's own hold was
+    // taken in the HELD phase and never booked — it must be released, not leaked.
+    const rail = new MockRail({
+      priceCents: 8500,
+      holdExpiresBySlot: { [staySlot]: "2026-08-01T00:00:00.000Z", [tourSlot]: "2026-07-25T00:00:00.000Z" },
+      failBookFor: [staySlot],
+    });
+    const staged = await new Orchestrator(rail, new InMemoryBookingStore()).executeStaged(manifest, { lead, now });
+    expect(staged.state).toBe("FAILED");
+    expect(staged.releasedHolds).toContain("hold-" + staySlot);
+  });
+
   it("treats an expired hold at commit time as a failure and unwinds", async () => {
     const probe = new MockRail({ priceCents: 8500 });
     const manifest = await manifestFor(probe);

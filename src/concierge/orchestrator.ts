@@ -249,7 +249,10 @@ export class Orchestrator {
 
   /** Phase 2a path: STAGED commit. Hold everything (no commitment), assemble + validate spend
    *  caps, then commit shortest-hold-TTL-first. Any failure unwinds: compensate booked items +
-   *  release still-uncommitted holds. Ends CONFIRMED or FAILED; deterministic + audit-logged. */
+   *  release still-uncommitted holds. Ends CONFIRMED or FAILED; deterministic + audit-logged.
+   *  NOT retry-safe: unlike executeSaga there is no idempotency short-circuit, so re-running a
+   *  partially-committed trip re-holds/re-books. Retry-safety lands with the transactional outbox
+   *  + persistence in Phase 2c; until then call this exactly once per trip. */
   async executeStaged(manifest: BookingManifest, ctx: StagedCtx): Promise<StagedResult> {
     const actor = ctx.actor ?? "orchestrator";
     const results: BookingResult[] = [];
@@ -269,6 +272,8 @@ export class Orchestrator {
     for (const item of manifest.items) {
       const { itemId, category } = item.intent;
       if (!item.chosen) {
+        const id = bookingRecordId(manifest.tripId, itemId, this.rail.railId);
+        await this.store.put({ id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: "no candidate chosen" });
         results.push({ itemId, status: "failed", confirmationCode: null, error: "no candidate chosen" });
         return unwind(`item ${itemId}: no candidate chosen`, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
       }
@@ -289,14 +294,16 @@ export class Orchestrator {
     const committedOrder: string[] = [];
     for (let i = 0; i < order.length; i++) {
       const h = order[i]!;
-      const remaining = order.slice(i + 1).map((x) => ({ itemId: x.itemId, holdRef: x.holdRef }));
+      // Uncommitted holds from this point on — INCLUDING h itself, whose hold is taken but not
+      // yet booked. On a failure here, h's own hold must be released too, never leaked.
+      const uncommitted = order.slice(i).map((x) => ({ itemId: x.itemId, holdRef: x.holdRef }));
       const id = bookingRecordId(manifest.tripId, h.itemId, this.rail.railId);
 
       const nowMs = Date.parse(ctx.now);
       const expMs = Date.parse(h.expiresAt);
       if (Number.isNaN(expMs) || Number.isNaN(nowMs) || nowMs >= expMs) {
         results.push({ itemId: h.itemId, status: "failed", confirmationCode: null, error: "hold expired" });
-        return unwind(`hold ${h.holdRef} expired at ${h.expiresAt}`, booked, remaining);
+        return unwind(`hold ${h.holdRef} expired at ${h.expiresAt}`, booked, uncommitted);
       }
 
       try {
@@ -313,7 +320,7 @@ export class Orchestrator {
         await this.store.put(rec);
         await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book_failed", rail: this.rail.railId, externalRef: null, amountCents: 0, detail: msg });
         results.push({ itemId: h.itemId, status: "failed", confirmationCode: null, error: msg });
-        return unwind(msg, booked, remaining);
+        return unwind(msg, booked, uncommitted);
       }
     }
 
