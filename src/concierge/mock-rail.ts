@@ -13,26 +13,48 @@ const FREE_CANCEL: CancellationPolicy = {
   refundAmountCents: 0,
 };
 
+// Far-future sentinels keep the happy path from ever tripping the hold-expiry guard.
+const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
+
+export interface MockRailOpts {
+  failBookFor?: string[];
+  /** >0 makes this a paid (activity-style) rail with a refundable policy. */
+  priceCents?: number;
+  /** Override the hold expiry; a past ISO simulates an already-expired hold. */
+  holdExpiresAt?: string;
+  /** What cancel refunds; defaults to priceCents. */
+  refundAmountCents?: number;
+}
+
 export class MockRail implements BookingRail {
   readonly railId = "mock";
   private booked = new Set<string>();
   private holdToSlot = new Map<string, string>();
-  constructor(private opts: { failBookFor?: string[] } = {}) {}
+  constructor(private opts: MockRailOpts = {}) {}
+
+  private policy(): CancellationPolicy {
+    const price = this.opts.priceCents ?? 0;
+    if (price > 0) {
+      return { refundable: true, freeCancelUntil: FAR_FUTURE, refundAmountCents: this.opts.refundAmountCents ?? price };
+    }
+    return FREE_CANCEL;
+  }
 
   async search(q: RailSearchQuery): Promise<RailSlot[]> {
     const seed = hashStr(`${q.area}|${q.dateTime}|${q.partySize}`);
+    const price = this.opts.priceCents ?? 0;
     const n = 3;
     return Array.from({ length: n }, (_, i) => ({
       railSlotId: `${q.area}-${(seed + i) % 1000}`,
-      label: `${q.area} dining option ${i + 1}`,
-      priceCents: 0,
+      label: `${q.area} option ${i + 1}`,
+      priceCents: price,
       startsAt: q.dateTime,
-      cancellation: FREE_CANCEL,
+      cancellation: this.policy(),
     }));
   }
 
   async getCancellationPolicy(): Promise<CancellationPolicy> {
-    return FREE_CANCEL;
+    return this.policy();
   }
 
   async hold(railSlotId: string, ctx: { partySize: number; dateTime: string }): Promise<HoldResult> {
@@ -40,13 +62,13 @@ export class MockRail implements BookingRail {
     this.holdToSlot.set(holdRef, railSlotId);
     return {
       holdRef,
-      expiresAt: ctx.dateTime,
+      expiresAt: this.opts.holdExpiresAt ?? FAR_FUTURE,
       slot: {
         railSlotId,
         label: railSlotId,
-        priceCents: 0,
+        priceCents: this.opts.priceCents ?? 0,
         startsAt: ctx.dateTime,
-        cancellation: FREE_CANCEL,
+        cancellation: this.policy(),
       },
     };
   }
@@ -58,12 +80,12 @@ export class MockRail implements BookingRail {
     }
     const railRef = `ref-${slotId}`;
     this.booked.add(railRef);
-    return { railRef, confirmationCode: `MOCK-${slotId}`, amountCents: 0 };
+    return { railRef, confirmationCode: `MOCK-${slotId}`, amountCents: this.opts.priceCents ?? 0 };
   }
 
   async cancel(railRef: string): Promise<{ refundAmountCents: number }> {
     this.booked.delete(railRef);
-    return { refundAmountCents: 0 };
+    return { refundAmountCents: this.opts.refundAmountCents ?? this.opts.priceCents ?? 0 };
   }
 
   async status(railRef: string): Promise<BookingStatus> {
