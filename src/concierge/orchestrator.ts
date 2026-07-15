@@ -38,11 +38,20 @@ export interface CompensationRecord {
   refundAmountCents: number;
 }
 
+export interface CompensationFailure {
+  itemId: string;
+  railRef: string;
+  error: string;
+}
+
 export interface SagaResult {
   tripId: string;
   status: "confirmed" | "compensated";
   results: BookingResult[];
   compensations: CompensationRecord[];
+  /** Booked items whose compensating cancel threw — orphans that need operator follow-up.
+   *  Non-empty here is the "stuck saga" alert condition. */
+  failedCompensations: CompensationFailure[];
   error: string | null;
 }
 
@@ -100,15 +109,24 @@ export class Orchestrator {
 
     const compensate = async (error: string): Promise<SagaResult> => {
       const compensations: CompensationRecord[] = [];
+      const failedCompensations: CompensationFailure[] = [];
+      // Each cancel is isolated: one rail.cancel() throwing must NOT abandon the remaining
+      // bookings. A failed compensation is recorded (an orphan needing follow-up), never swallowed.
       for (const b of booked) {
-        const { refundAmountCents } = await this.rail.cancel(b.railRef);
         const id = bookingRecordId(manifest.tripId, b.itemId, this.rail.railId);
-        const rec = await this.store.get(id);
-        if (rec) await this.store.put({ ...rec, status: "cancelled" });
-        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: b.itemId, actor, action: "compensate", rail: this.rail.railId, externalRef: b.railRef, amountCents: refundAmountCents });
-        compensations.push({ itemId: b.itemId, railRef: b.railRef, refundAmountCents });
+        try {
+          const { refundAmountCents } = await this.rail.cancel(b.railRef);
+          const rec = await this.store.get(id);
+          if (rec) await this.store.put({ ...rec, status: "cancelled" });
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: b.itemId, actor, action: "compensate", rail: this.rail.railId, externalRef: b.railRef, amountCents: refundAmountCents });
+          compensations.push({ itemId: b.itemId, railRef: b.railRef, refundAmountCents });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: b.itemId, actor, action: "compensate_failed", rail: this.rail.railId, externalRef: b.railRef, amountCents: 0, detail: msg });
+          failedCompensations.push({ itemId: b.itemId, railRef: b.railRef, error: msg });
+        }
       }
-      return { tripId: manifest.tripId, status: "compensated", results, compensations, error };
+      return { tripId: manifest.tripId, status: "compensated", results, compensations, failedCompensations, error };
     };
 
     for (const item of manifest.items) {
@@ -135,17 +153,24 @@ export class Orchestrator {
         const held = await this.rail.hold(item.chosen.railSlotId, { partySize: item.intent.query.partySize, dateTime: item.chosen.startsAt });
         await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "hold", rail: this.rail.railId, externalRef: held.holdRef, amountCents: item.chosen.priceCents });
 
-        // Hold-expiry is a first-class failure, never a silent lapse.
-        if (ctx.now >= held.expiresAt) {
+        // Hold-expiry is a first-class failure, never a silent lapse. Compare INSTANTS, not
+        // strings — rails may report expiresAt in any ISO8601 zone/precision, so a lexicographic
+        // compare would both false-expire valid holds and miss real ones. An unparseable expiry
+        // is unsafe to book against, so treat it as expired (fail loud).
+        const nowMs = Date.parse(ctx.now);
+        const expMs = Date.parse(held.expiresAt);
+        if (Number.isNaN(expMs) || Number.isNaN(nowMs) || nowMs >= expMs) {
           throw new Error(`hold ${held.holdRef} expired at ${held.expiresAt}`);
         }
 
         const bookedRes = await this.rail.book(held.holdRef, ctx.lead);
+        // Record the live rail booking BEFORE any further await, so a store/audit write that
+        // throws next cannot orphan a booking that already exists on the rail.
+        booked.push({ itemId, railRef: bookedRes.railRef });
         const rec: BookingRecord = { id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "confirmed", railRef: bookedRes.railRef, confirmationCode: bookedRes.confirmationCode, amountCents: bookedRes.amountCents, error: null };
         await this.store.put(rec);
         await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "book", rail: this.rail.railId, externalRef: bookedRes.railRef, amountCents: bookedRes.amountCents });
         results.push({ itemId, status: "confirmed", confirmationCode: bookedRes.confirmationCode, error: null });
-        booked.push({ itemId, railRef: bookedRes.railRef });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const rec: BookingRecord = { id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: msg };
@@ -156,6 +181,6 @@ export class Orchestrator {
       }
     }
 
-    return { tripId: manifest.tripId, status: "confirmed", results, compensations: [], error: null };
+    return { tripId: manifest.tripId, status: "confirmed", results, compensations: [], failedCompensations: [], error: null };
   }
 }

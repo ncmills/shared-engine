@@ -5,7 +5,7 @@ export interface AuditEntry {
   tripId: string;
   itemId: string | null;
   actor: string; // e.g. "orchestrator"
-  action: "hold" | "book" | "book_failed" | "compensate";
+  action: "hold" | "book" | "book_failed" | "compensate" | "compensate_failed";
   rail: string;
   externalRef: string | null; // holdRef / railRef
   amountCents: number;

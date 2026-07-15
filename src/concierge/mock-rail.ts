@@ -18,6 +18,8 @@ const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
 
 export interface MockRailOpts {
   failBookFor?: string[];
+  /** Slot ids whose cancel should throw — simulates a rail that fails to compensate. */
+  failCancelFor?: string[];
   /** >0 makes this a paid (activity-style) rail with a refundable policy. */
   priceCents?: number;
   /** Override the hold expiry; a past ISO simulates an already-expired hold. */
@@ -84,6 +86,10 @@ export class MockRail implements BookingRail {
   }
 
   async cancel(railRef: string): Promise<{ refundAmountCents: number }> {
+    const slotId = railRef.replace(/^ref-/, "");
+    if (this.opts.failCancelFor?.includes(slotId)) {
+      throw new Error(`MockRail: cancel refused for ${railRef}`);
+    }
     this.booked.delete(railRef);
     return { refundAmountCents: this.opts.refundAmountCents ?? this.opts.priceCents ?? 0 };
   }
