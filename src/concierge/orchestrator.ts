@@ -277,9 +277,25 @@ export class Orchestrator {
         results.push({ itemId, status: "failed", confirmationCode: null, error: "no candidate chosen" });
         return unwind(`item ${itemId}: no candidate chosen`, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
       }
-      const hold = await this.rail.hold(item.chosen.railSlotId, { partySize: item.intent.query.partySize, dateTime: item.chosen.startsAt });
-      await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "hold", rail: this.rail.railId, externalRef: hold.holdRef, amountCents: item.chosen.priceCents });
-      held.push({ itemId, category, railSlotId: item.chosen.railSlotId, holdRef: hold.holdRef, expiresAt: hold.expiresAt, priceCents: item.chosen.priceCents });
+      let hold;
+      try {
+        hold = await this.rail.hold(item.chosen.railSlotId, { partySize: item.intent.query.partySize, dateTime: item.chosen.startsAt });
+      } catch (e) {
+        // A rail whose hold() can throw (e.g. LiteAPI prebook with no locked/USD price) must NOT
+        // abort executeStaged mid-flight and leak the prebooks already taken. Unwind: release the
+        // holds gathered so far, record the failure, return the documented FAILED result.
+        const msg = e instanceof Error ? e.message : String(e);
+        const id = bookingRecordId(manifest.tripId, itemId, this.rail.railId);
+        await this.store.put({ id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: msg });
+        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "hold_failed", rail: this.rail.railId, externalRef: null, amountCents: 0, detail: msg });
+        results.push({ itemId, status: "failed", confirmationCode: null, error: msg });
+        return unwind(`item ${itemId}: hold failed: ${msg}`, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
+      }
+      // MONEY-SAFETY: the spend-cap gate below must see the LOCKED (hold/prebook) price, not the
+      // search quote — a two-price rail that drifts UP at hold time must be caught by the cap.
+      const lockedCents = hold.slot.priceCents;
+      await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "hold", rail: this.rail.railId, externalRef: hold.holdRef, amountCents: lockedCents });
+      held.push({ itemId, category, railSlotId: item.chosen.railSlotId, holdRef: hold.holdRef, expiresAt: hold.expiresAt, priceCents: lockedCents });
     }
 
     // --- PENDING_CONFIRM: assemble priced trip + spend caps ---

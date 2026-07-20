@@ -108,7 +108,9 @@ export function liteApiSandboxFetch(): typeof fetch {
     const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
 
     if (u.endsWith("/rates") && m === "POST") {
-      const id = `off-${String(body.area ?? "x").replace(/\s+/g, "-")}`;
+      // Offer identity includes area + checkin + guests so two intents in the SAME area (different
+      // dates/party) don't collapse to one offer/prebook/booking ref (which would mask a double-book).
+      const id = `off-${String(body.area ?? "x").replace(/\s+/g, "-")}-${String(body.checkin ?? "")}-${String(body.guests ?? "")}`;
       return json({ offers: [{ offerId: id, name: `${body.area} Villa`, price: { amount: 450.0, currency: "USD" }, checkin: body.checkin, refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" }] });
     }
     if (u.endsWith("/rates/prebook") && m === "POST") {
@@ -155,18 +157,20 @@ export async function runConciergeLodgingDryRun(
   const slotByItem = new Map(manifest.items.map((i) => [i.intent.itemId, i.chosen]));
   const deeplinks = staged.results
     .filter((r) => r.status === "confirmed")
-    .map((r) => {
+    .map((r): { itemId: string; url: string } | null => {
       const chosen = slotByItem.get(r.itemId);
+      if (!chosen) return null; // defensive: a confirmed result always had a chosen slot (invariant lives in executeStaged)
       const intent = manifest.items.find((i) => i.intent.itemId === r.itemId)?.intent;
       return {
         itemId: r.itemId,
         url: buildLodgingDeeplink({
           tenant: args.tenant,
-          railSlotId: chosen!.railSlotId,
-          checkIn: chosen!.startsAt,
+          railSlotId: chosen.railSlotId,
+          checkIn: chosen.startsAt,
           partySize: intent?.query.partySize,
         }),
       };
-    });
+    })
+    .filter((d): d is { itemId: string; url: string } => d !== null);
   return { manifest, staged, deeplinks, audit: await audit.entries(args.tripId) };
 }

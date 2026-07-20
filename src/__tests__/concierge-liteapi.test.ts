@@ -4,7 +4,7 @@ import { runBookingRailContract } from "../concierge/rail-contract";
 
 /** Deterministic LiteAPI sandbox. NOTE: the prebook price (46500) DRIFTS UP from the search price
  *  (45000) — 2b's whole point is that a real rail locks a different price at prebook than it quoted. */
-function liteApiFakeFetch(over?: { bookingId?: unknown; bookAmount?: unknown }): typeof fetch {
+function liteApiFakeFetch(over?: { bookingId?: unknown; bookAmount?: unknown; prebookCurrency?: string }): typeof fetch {
   return vi.fn(async (url: any, init?: any) => {
     const u = String(url);
     const m = init?.method ?? "GET";
@@ -17,11 +17,15 @@ function liteApiFakeFetch(over?: { bookingId?: unknown; bookAmount?: unknown }):
           { offerId: "off-1", name: "Nashville Villa", price: { amount: 450.0, currency: "USD" }, checkin: "2026-08-01T15:00:00Z", refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" },
           // An un-priced offer MUST be excluded, never mapped to price 0.
           { offerId: "off-2", name: "Broken Rate", price: null, checkin: "2026-08-01T15:00:00Z", refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" },
+          // A NON-USD rate MUST be excluded, never scaled as USD cents (currency silently ignored bug).
+          { offerId: "off-3", name: "Euro Villa", price: { amount: 450.0, currency: "EUR" }, checkin: "2026-08-01T15:00:00Z", refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" },
+          // A $0 "free" lodging rate is garbage — excluded (never a valid stay).
+          { offerId: "off-4", name: "Free Villa", price: { amount: 0, currency: "USD" }, checkin: "2026-08-01T15:00:00Z", refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" },
         ],
       });
     }
     if (u.endsWith("/rates/prebook") && m === "POST") {
-      return json({ prebookId: "pre-1", price: { amount: 465.0, currency: "USD" }, expiresAt: "2026-07-25T00:00:00Z" });
+      return json({ prebookId: "pre-1", price: { amount: 465.0, currency: over?.prebookCurrency ?? "USD" }, expiresAt: "2026-07-25T00:00:00Z" });
     }
     if (u.endsWith("/rates/book") && m === "POST") {
       return json({ bookingId: over && "bookingId" in over ? over.bookingId : "book-1", confirmation: "LITE-XYZ", price: { amount: over?.bookAmount ?? 465.0, currency: "USD" } });
@@ -35,13 +39,17 @@ function liteApiFakeFetch(over?: { bookingId?: unknown; bookAmount?: unknown }):
 const make = () => new LiteAPIAdapter({ baseUrl: "https://sandbox.liteapi.test", apiKey: "k", fetchImpl: liteApiFakeFetch() });
 
 describe("LiteAPIAdapter (mocked)", () => {
-  it("maps priced offers to RailSlot[] and EXCLUDES un-priced offers (never ?? 0)", async () => {
+  it("maps priced USD offers and EXCLUDES un-priced / non-USD / $0 offers (never ?? 0, never scale a foreign currency)", async () => {
     const slots = await make().search({ area: "Nashville", dateTime: "2026-08-01T15:00:00Z", partySize: 6 });
-    expect(slots).toHaveLength(1); // off-2 (price:null) dropped
-    expect(slots[0]!.railSlotId).toBe("off-1");
+    expect(slots.map((s) => s.railSlotId)).toEqual(["off-1"]); // off-2(null) / off-3(EUR) / off-4($0) all dropped
     expect(slots[0]!.priceCents).toBe(45000);
     expect(slots[0]!.cancellation.refundable).toBe(true);
     expect(slots[0]!.cancellation.freeCancelUntil).toBe("2026-07-28T00:00:00Z");
+  });
+
+  it("hold THROWS on a non-USD prebook price (never scale a foreign currency as USD cents)", async () => {
+    const rail = new LiteAPIAdapter({ baseUrl: "https://sandbox.liteapi.test", apiKey: "k", fetchImpl: liteApiFakeFetch({ prebookCurrency: "EUR" }) });
+    await expect(rail.hold("off-1", { partySize: 6, dateTime: "2026-08-01T15:00:00Z" })).rejects.toThrow(/usable|USD|price/i);
   });
 
   it("hold(prebook) locks the PREBOOK price into slot.priceCents even when it drifts from search", async () => {
@@ -65,9 +73,13 @@ describe("LiteAPIAdapter (mocked)", () => {
     await expect(rail.book("pre-1", { leadName: "T", leadEmail: "t@e.com" })).rejects.toThrow(/booking id|bookingId|missing/i);
   });
 
-  it("book THROWS on a non-finite amount (never record a phantom 0)", async () => {
+  it("book RETURNS the live ref (never orphans a paid booking) even when the amount is unparseable", async () => {
+    // Once a bookingId exists the stay is booked+charged — throwing over a bad amount would discard
+    // the ref and orphan it. We keep the ref; the amount degrades to a best-effort 0 for reconciliation.
     const rail = new LiteAPIAdapter({ baseUrl: "https://sandbox.liteapi.test", apiKey: "k", fetchImpl: liteApiFakeFetch({ bookAmount: "oops" }) });
-    await expect(rail.book("pre-1", { leadName: "T", leadEmail: "t@e.com" })).rejects.toThrow(/amount/i);
+    const booked = await rail.book("pre-1", { leadName: "T", leadEmail: "t@e.com" });
+    expect(booked.railRef).toBe("book-1");
+    expect(booked.amountCents).toBe(0);
   });
 
   it("release resolves without a network call (prebooks are transient — they expire)", async () => {

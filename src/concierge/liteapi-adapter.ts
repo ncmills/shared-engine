@@ -7,21 +7,31 @@ export interface LiteAPIAdapterOpts {
   fetchImpl?: typeof fetch;
 }
 
-/** Convert a rail's decimal price (USD) to integer cents, or null if it is not a usable number.
- *  MONEY-SAFETY: callers must EXCLUDE or THROW on null — never coalesce to 0 (that would silently
- *  disable the spend-caps guardrail). See is-this-worth-it §"price_cents ?? 0". */
-function toCents(amount: unknown): number | null {
-  if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) return null;
+/** Convert a LiteAPI money object `{ amount, currency }` to integer USD cents, or null when it is not
+ *  a usable rate. MONEY-SAFETY: callers must EXCLUDE or THROW on null — never coalesce to 0 (that
+ *  silently disables the spend-caps guardrail). Rejects:
+ *   - a non-USD currency (the engine is USD-only; scaling e.g. a JPY amount as USD cents would inject
+ *     a phantom sum into caps + audit),
+ *   - a non-finite amount,
+ *   - amount <= 0 (a lodging rate is never free; 0 is garbage, not a valid stay).
+ *  See is-this-worth-it §"price_cents ?? 0". */
+function moneyToCents(m: unknown): number | null {
+  if (!m || typeof m !== "object") return null;
+  const amount = (m as { amount?: unknown }).amount;
+  const currency = (m as { currency?: unknown }).currency;
+  if (currency !== "USD") return null;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return null;
   return Math.round(amount * 100);
 }
 
 function toPolicy(offer: { refundable?: unknown; freeCancelUntil?: unknown; refundAmount?: unknown }): CancellationPolicy {
   const refundable = !!offer.refundable;
   if (!refundable) return { refundable: false, freeCancelUntil: null, refundAmountCents: null };
+  const ra = offer.refundAmount;
   return {
     refundable: true,
     freeCancelUntil: typeof offer.freeCancelUntil === "string" ? offer.freeCancelUntil : null,
-    refundAmountCents: toCents(offer.refundAmount),
+    refundAmountCents: typeof ra === "number" && Number.isFinite(ra) && ra >= 0 ? Math.round(ra * 100) : null,
   };
 }
 
@@ -49,8 +59,8 @@ export class LiteAPIAdapter implements BookingRail {
     const data = await this.req(`/rates`, { method: "POST", body: JSON.stringify({ area: q.area, checkin: q.dateTime, guests: q.partySize }) });
     const slots: RailSlot[] = [];
     for (const offer of data.offers ?? []) {
-      const cents = toCents(offer.price?.amount);
-      if (cents == null) continue; // MONEY-SAFETY: drop un-priced offers rather than zero them.
+      const cents = moneyToCents(offer.price);
+      if (cents == null) continue; // MONEY-SAFETY: drop un-priced / non-USD / <=0 offers, never zero them.
       slots.push({
         railSlotId: offer.offerId,
         label: offer.name ?? offer.offerId,
@@ -69,10 +79,11 @@ export class LiteAPIAdapter implements BookingRail {
 
   async hold(railSlotId: string, ctx: { partySize: number; dateTime: string }): Promise<HoldResult> {
     const data = await this.req(`/rates/prebook`, { method: "POST", body: JSON.stringify({ offerId: railSlotId, guests: ctx.partySize, checkin: ctx.dateTime }) });
-    const cents = toCents(data.price?.amount);
+    const cents = moneyToCents(data.price);
     if (cents == null) {
-      // MONEY-SAFETY: a prebook with no locked price cannot be booked safely — fail loud.
-      throw new Error(`LiteAPI prebook ${railSlotId} returned no usable price`);
+      // MONEY-SAFETY: a prebook with no usable (USD, >0) locked price cannot be booked safely. No
+      // booking ref exists yet, so throwing is safe — executeStaged catches it and unwinds.
+      throw new Error(`LiteAPI prebook ${railSlotId} returned no usable (USD, >0) price`);
     }
     if (typeof data.prebookId !== "string" || data.prebookId.length === 0) {
       throw new Error(`LiteAPI prebook ${railSlotId} returned no prebookId`);
@@ -92,25 +103,29 @@ export class LiteAPIAdapter implements BookingRail {
 
   async book(holdRef: string, ctx: { leadName: string; leadEmail: string }): Promise<BookResult> {
     const data = await this.req(`/rates/book`, { method: "POST", body: JSON.stringify({ prebookId: holdRef, holder: { name: ctx.leadName, email: ctx.leadEmail } }) });
-    // MONEY-SAFETY: a null/empty booking id would let a later status()/cancel() target nothing and
-    // invite a double-book. Refuse to return one.
+    // MONEY-SAFETY (no ref): a null/empty booking id means NOTHING was booked — refuse to return a
+    // ref that a later status()/cancel() would target. Safe to throw (there is nothing to orphan).
     if (typeof data.bookingId !== "string" || data.bookingId.length === 0) {
       throw new Error(`LiteAPI book returned a missing booking id for prebook ${holdRef}`);
     }
-    const cents = toCents(data.price?.amount);
-    if (cents == null) {
-      throw new Error(`LiteAPI book ${data.bookingId} returned a non-finite amount`);
-    }
+    // MONEY-SAFETY (live ref): once a booking id EXISTS the stay is booked and charged. We must NOT
+    // throw over a price-parse problem — that would discard the ref and orphan a paid booking the
+    // orchestrator can never compensate. Return the ref; record the amount best-effort (0 only if the
+    // rail omitted/garbled it) and let downstream reconciliation correct the figure. The booking is real.
+    const cents = moneyToCents(data.price);
     return {
       railRef: data.bookingId,
       confirmationCode: typeof data.confirmation === "string" ? data.confirmation : data.bookingId,
-      amountCents: cents,
+      amountCents: cents ?? 0,
     };
   }
 
   async cancel(railRef: string): Promise<{ refundAmountCents: number }> {
     const data = await this.req(`/bookings/${encodeURIComponent(railRef)}`, { method: "PUT", body: JSON.stringify({ status: "cancelled" }) });
-    return { refundAmountCents: toCents(data.refund?.amount) ?? 0 };
+    // A successful cancel must never THROW over a refund-parse issue (that would abort compensation
+    // mid-unwind and leave a booked item). Unknown/garbled refund records 0 — the conservative
+    // (under-credit) direction; live reconciliation reconciles the true refund. Documented gap.
+    return { refundAmountCents: moneyToCents(data.refund) ?? 0 };
   }
 
   /** Prebooks are transient — LiteAPI has no prebook-cancel endpoint; an un-booked prebook simply
