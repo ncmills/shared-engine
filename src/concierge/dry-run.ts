@@ -1,4 +1,6 @@
 import { MockRail } from "./mock-rail";
+import { LiteAPIAdapter } from "./liteapi-adapter";
+import { buildLodgingDeeplink } from "./lodging-deeplink";
 import { resolveDining, resolveActivities, resolveManifest, DeterministicProposalSource } from "./resolver";
 import { Orchestrator, InMemoryBookingStore } from "./orchestrator";
 import { InMemoryAuditLog } from "./audit";
@@ -92,4 +94,79 @@ export async function runConciergeStagedDryRun(
     caps: args.caps,
   });
   return { manifest, staged, audit: await audit.entries(args.tripId) };
+}
+
+/** Deterministic in-process LiteAPI sandbox (zero network). Returns a single refundable, priced
+ *  lodging offer per search whose PREBOOK price equals its SEARCH price — the clean happy path.
+ *  (Price drift is proven in the adapter + checkPriceDrift unit tests, not here.) Ids are derived
+ *  from the request so distinct areas yield distinct offer/prebook/booking refs. */
+export function liteApiSandboxFetch(): typeof fetch {
+  return (async (url: any, init?: any) => {
+    const u = String(url);
+    const m = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+
+    if (u.endsWith("/rates") && m === "POST") {
+      const id = `off-${String(body.area ?? "x").replace(/\s+/g, "-")}`;
+      return json({ offers: [{ offerId: id, name: `${body.area} Villa`, price: { amount: 450.0, currency: "USD" }, checkin: body.checkin, refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" }] });
+    }
+    if (u.endsWith("/rates/prebook") && m === "POST") {
+      return json({ prebookId: `pre-${body.offerId}`, price: { amount: 450.0, currency: "USD" }, expiresAt: "2999-01-01T00:00:00.000Z", refundable: true, freeCancelUntil: "2026-07-28T00:00:00Z" });
+    }
+    if (u.endsWith("/rates/book") && m === "POST") {
+      return json({ bookingId: `book-${body.prebookId}`, confirmation: `LITE-${body.prebookId}`, price: { amount: 450.0, currency: "USD" } });
+    }
+    if (u.includes("/bookings/") && m === "PUT") return json({ refund: { amount: 450.0, currency: "USD" } });
+    if (u.includes("/bookings/") && m === "GET") return json({ status: "CONFIRMED" });
+    return json({});
+  }) as unknown as typeof fetch;
+}
+
+export interface LodgingDryRunArgs {
+  tripId: string;
+  tenant: ConciergeTenant;
+  intents: BookingIntent[];
+  now: string; // ISO8601
+  /** Override the LiteAPI transport; defaults to the built-in deterministic sandbox (no network). */
+  fetchImpl?: typeof fetch;
+}
+
+/** Wires the LiteAPIAdapter (built-in sandbox fetch) + resolveManifest + staged Orchestrator +
+ *  in-memory store + audit, then builds a guest-facing villa deeplink for every CONFIRMED booking.
+ *  The CI-provable Phase 2b "lodging itinerary -> staged commit over a real two-price rail ->
+ *  shareable deeplinks" loop. Zero external calls. */
+export async function runConciergeLodgingDryRun(
+  args: LodgingDryRunArgs,
+): Promise<{ manifest: BookingManifest; staged: StagedResult; deeplinks: { itemId: string; url: string }[]; audit: AuditEntry[] }> {
+  const rail = new LiteAPIAdapter({ baseUrl: "https://sandbox.liteapi.local", apiKey: "sandbox", fetchImpl: args.fetchImpl ?? liteApiSandboxFetch() });
+  const manifest = await resolveManifest({
+    tripId: args.tripId,
+    tenant: args.tenant,
+    intents: args.intents,
+    rail,
+    proposals: new DeterministicProposalSource(),
+  });
+  const audit = new InMemoryAuditLog();
+  const staged = await new Orchestrator(rail, new InMemoryBookingStore(), audit).executeStaged(manifest, {
+    lead: { leadName: "Trip Lead", leadEmail: "lead@example.com" },
+    now: args.now,
+  });
+  const slotByItem = new Map(manifest.items.map((i) => [i.intent.itemId, i.chosen]));
+  const deeplinks = staged.results
+    .filter((r) => r.status === "confirmed")
+    .map((r) => {
+      const chosen = slotByItem.get(r.itemId);
+      const intent = manifest.items.find((i) => i.intent.itemId === r.itemId)?.intent;
+      return {
+        itemId: r.itemId,
+        url: buildLodgingDeeplink({
+          tenant: args.tenant,
+          railSlotId: chosen!.railSlotId,
+          checkIn: chosen!.startsAt,
+          partySize: intent?.query.partySize,
+        }),
+      };
+    });
+  return { manifest, staged, deeplinks, audit: await audit.entries(args.tripId) };
 }

@@ -9,3 +9,6 @@ export * from "./orchestrator";
 export * from "./dry-run";
 export * from "./opentable-adapter";
 export * from "./getyourguide-adapter";
+export * from "./liteapi-adapter";
+export * from "./price-drift";
+export * from "./lodging-deeplink";
