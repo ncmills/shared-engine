@@ -117,6 +117,9 @@ export async function proposeWizardPatch<TState>(
   }
 
   // 2. Merge + validate. An invalid required state is a no-op reported as unmet.
+  // NOTE: the note/what/why/fix strings below are intentionally INVARIANT, not brand-configurable —
+  // verified byte-identical across MOH/BMHQ/HHQ 2026-07-21. Do not add a config slot for these; a
+  // future brand-onboarder should assume they're shared, not something to customize per-brand.
   let next: TState;
   try {
     next = config.validate({ ...current, ...patch });
@@ -137,12 +140,13 @@ export async function proposeWizardPatch<TState>(
   // 3. Diff on editable fields only (validation may have coerced values back).
   const changed = config.editableFields.filter(
     (k) => JSON.stringify((next as Record<string, unknown>)[k as string]) !== JSON.stringify((current as Record<string, unknown>)[k as string]),
-  ) as (keyof TState)[];
+  );
 
   let note: string;
   if (changed.length) {
     note = `Updated ${changed.map((k) => config.humanLabels[k as keyof TState & string] ?? String(k)).join(", ")}.`;
   } else if (unmet) {
+    // NOTE: intentionally INVARIANT, like the catch-block note above — not a config slot.
     note = "I couldn't make that change here.";
   } else {
     note = config.noopFallbackNote;

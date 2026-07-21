@@ -41,5 +41,7 @@ export async function answerTripQuestion<TStored, TPlan>(
     prompt: ["TRIP DATA:", opts.config.serializePlan(plan, opts.timing), "", "QUESTION:", question.trim(), "", "Answer from the TRIP DATA only:"].join("\n"),
   });
   const answer = (raw ?? "").trim();
+  // NOTE: this fallback string is intentionally INVARIANT, not brand-configurable — verified
+  // byte-identical across MOH/BMHQ/HHQ 2026-07-21. Do not add a config slot for it.
   return { answer: answer || "Sorry — I couldn't find that in this plan. Try rephrasing, or the organizer can adjust the trip." };
 }

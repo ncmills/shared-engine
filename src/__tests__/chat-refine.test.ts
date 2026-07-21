@@ -38,6 +38,27 @@ describe("chat/refine", () => {
     expect(p).toContain("short TYPE tags");
   });
 
+  it("pins the full invariant refine guardrail prose so it cannot silently drift", () => {
+    const p = buildRefineSystemPrompt(CONFIG);
+
+    // Rule 1 — no-cascade / fewest-fields / patch:{} escape hatch.
+    expect(p).toContain("1. In `patch`, change a field ONLY IF the request maps to it CLEARLY and UNAMBIGUOUSLY and the new");
+    expect(p).toContain("   value is one of the exact options in the FIELD GUIDE. Change the FEWEST fields necessary — only");
+    expect(p).toContain("   the field(s) the user actually named. Never guess, never cascade edits the user didn't ask for.");
+    expect(p).toContain("   e.g. changing the DESTINATION never means changing");
+    expect(p).toContain("   leave every unnamed field exactly as-is. Return `patch: {}` if nothing clearly and specifically applies.");
+
+    // Rule 2 — unmet, not force-fit, not silently dropped.
+    expect(p).toContain("2. If ANY part of the request cannot be honored, DO NOT force it into a field and DO NOT drop it");
+    expect(p).toContain("   silently. Put it in `unmet` with: `what` (the part you couldn't do), `why` (plain reason), `fix`");
+    expect(p).toContain("   (a concrete next step the user can take). Set `unmet` to null only when the ENTIRE request was");
+    expect(p).toContain("   fully and accurately applied in `patch`.");
+
+    // Rule 3 — never both a real patch and a too-vague unmet.
+    expect(p).toContain("3. NEVER return both a real change in `patch` AND an `unmet` that says the request was too vague to");
+    expect(p).toContain("   act on. If you're unsure enough to call it ambiguous, the patch for that part must be empty.");
+  });
+
   it("whitelists to editable fields and drops PII/unknown keys", async () => {
     const r = await proposeWizardPatch<TestState>(
       { destination: "Austin, TX", numberOfDays: 3, organizerEmail: "a@b.co" },
