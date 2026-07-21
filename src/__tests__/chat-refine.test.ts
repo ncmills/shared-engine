@@ -22,6 +22,7 @@ const CONFIG: RefineConfig<TestState> = {
   destinationRule: "APPLY any US place the user names.",
   directionalRule: "\"longer\" → more days.",
   alreadySetRule: "If already set, return patch: {} + unmet.",
+  typeTagsRule: "7. `activities` are short TYPE tags — never write specific venue names.",
   humanLabels: { numberOfDays: "trip length" },
   noopFallbackNote: "I can change destination or trip length.",
 };
@@ -34,6 +35,7 @@ describe("chat/refine", () => {
     expect(p).toContain("test-trip planner");
     expect(p).toContain("destination: a US city string");
     expect(p).toContain('{ "patch":'); // invariant JSON contract retained
+    expect(p).toContain("short TYPE tags");
   });
 
   it("whitelists to editable fields and drops PII/unknown keys", async () => {

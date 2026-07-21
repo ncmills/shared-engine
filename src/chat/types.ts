@@ -43,6 +43,8 @@ export interface RefineConfig<TState> {
   directionalRule: string;
   /** Full body of Rule 6 (already-set honesty) — brand-specific examples. */
   alreadySetRule: string;
+  /** Full body of Rule 7 (type-tags-not-venues) — brand-specific vocab/examples (MOH says "spa"/"wine tasting", HHQ says "venue/course names"). */
+  typeTagsRule: string;
   /** Field → human label for the change note. */
   humanLabels: Partial<Record<keyof TState & string, string>>;
   /** Shown when a request is in-scope but maps to nothing (lists what this box CAN change). */
