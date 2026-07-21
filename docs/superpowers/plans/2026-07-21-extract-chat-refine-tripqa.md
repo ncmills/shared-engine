@@ -843,11 +843,11 @@ If MOH includes `shared-engine` and HHQ omits it, add `shared-engine` to HHQ's `
     ```
   - validator: `import { validateWizardState } from "./validate"`.
 
-- [ ] **Step 5: Rewrite `src/lib/trip-qa.ts`** as Task 4 Step 4 with HHQ specifics:
+- [ ] **Step 5: Rewrite `src/lib/trip-qa.ts`** as Task 4 Step 4 with HHQ specifics. **HHQ's Q&A prompt is brand-divergent (golfer/caddie framing, Day-1/Day-2 ban interleaved in Rule 2, golf price examples) — use the `systemPrompt` override, NOT `tripNoun`/`extraGuardrails`, to preserve byte-identity + brand voice:**
   - `pickViewedPlan` — HHQ tier names (`weekender`/`pilgrimage`/`bucketList` + `bucket-list` alias), kept verbatim.
   - `serializePlanForQA(plan, timing?)` — HHQ version verbatim (courses instead of activities, `displayLabel`, timing param).
-  - `tripNoun: "golf trip"`.
-  - `extraGuardrails` — HHQ's Day-1/Day-2 labeling ban (the extra guardrail sentence from the current HHQ file).
+  - Keep HHQ's CURRENT local `buildQASystemPrompt()` body verbatim (the golf-framed prompt, lines 55-79 of the current file) as a local const/function, and pass its output as `systemPrompt` in `QA_CONFIG`. This is the ONE brand whose QA prompt is passed whole (byte-identical) rather than composed from the shared skeleton.
+  - `QA_CONFIG: QAConfig<StoredPlan, GeneratedPlan> = { pickViewedPlan, serializePlan: (plan, timing) => serializePlanForQA(plan, timing), tripNoun: "golf trip", systemPrompt: HHQ_QA_SYSTEM_PROMPT }` (tripNoun is unused when systemPrompt is set, but harmless to keep for clarity).
   - Wrapper threads timing:
     ```ts
     export function answerTripQuestion(
@@ -889,18 +889,49 @@ git push origin main
 Run: `for p in maid-of-honor-hq plan-my-party handicap-hq; do echo "== $p =="; cd ~/$p && vercel ls 2>/dev/null | head -4; done`
 Expected: latest Production deploy `● Ready` for each. If any shows `● Error` (font-flake — `reference_vercel_silent_build_error`), `vercel redeploy` it.
 
-- [ ] **Step 2: Live smoke — one refine + one Q&A per site**
+- [ ] **Step 2: Brand-integrity protection (per site)**
 
-For each of maidofhonorhq.com / bestmanhq.com / handicaphq.com: generate a plan, then via the live UI (or the `/api/refine` + `/api/ask` endpoints with a real planId): (a) a valid refine ("make it 4 days") returns a rebuilt plan; (b) a weather Q&A ("what's the weather?") is DECLINED; (c) a price Q&A returns the exact verbatim figure. HHQ additionally: (d) "take us to Scotland" emits `region:"International"` + `states:["Scotland"]`; (e) the no-op note reads golf-correct.
+The refactor must not leak one brand's vocabulary/scope into another. For each site verify, against its OWN brand guidelines (`maid-of-honor-hq/BRAND.md`, HHQ `docs/design-system.md`, BMHQ conventions):
+  - The site's `REFINE_CONFIG`/`QA_CONFIG` contain ONLY that brand's vocab — MOH bride/bachelorette, BMHQ groom/bachelor, HHQ golfer/golf. No cross-brand term (grep each config for the OTHER brands' signature words: "groom"/"bachelor"/"crew" must not appear in MOH; "bride"/"bachelorette" must not appear in BMHQ/HHQ; golf terms only in HHQ).
+  - Tier names correct per brand (MOH weekendWarrior/theLegend/theKing; HHQ weekender/pilgrimage/bucketList).
+  - Destination scope correct: MOH & BMHQ US-only (foreign → unmet); HHQ US + supported international.
+  - The MOH↔BMHQ pre-commit brand-drift hook passed (it actively guards "crew"-leak and prop drift) — confirm it ran clean on both commits.
+  - Zero UI/branding surface touched: `git diff --stat` for each consumer shows ONLY `src/lib/refine-plan.ts`, `src/lib/trip-qa.ts`, `package.json`, `package-lock.json` (+ HHQ `next.config.ts`) — no component/CSS/OG/favicon/BRAND.md change (so `feedback_favicon_og_on_design_change` is N/A — nothing branded changed).
 
-Record each result in the verification log. Expected: identical behavior to pre-extraction (bans hold, prices exact), plus HHQ's fixed golf note.
+- [ ] **Step 3: Intense, diverse, real-user live test — both features, every site**
 
-- [ ] **Step 3: Prove the drift is gone (single source of truth)**
+Dispatch one test agent per site (3 parallel) against PRODUCTION (maidofhonorhq.com / bestmanhq.com / handicaphq.com). Each: generate a REAL plan via `POST /api/generate-plan` (persists 21-day TTL; use a clearly-marked test organizer name and NO real/`+qa` alias email so the harness doesn't delete the plan and no lead is captured), capture its `planId` and the exact rendered prices/venues, then exercise the FULL matrix from a real user's POV via `/api/refine` and `/api/ask` (or the live UI). Run each case, record the model's actual response, and PASS/FAIL it.
+
+  Refine matrix (per site, brand-appropriate phrasing):
+  1. Valid single-field change ("make it 4 days" / "5 guys instead") → plan rebuilds, ONLY that field changed, note names it.
+  2. Valid destination change (in-scope city) → destination changes, no cascade into vibe/course/intensity.
+  3. Directional word ("way wilder"/"more golf"/"chill nights") → maps to the right axis; watch for the known unrequested-tag cascade (handoff #7).
+  4. Out-of-scope: booking/flights ("book us flights") → `unmet` + points to the right place, no field forced.
+  5. Out-of-scope: specific named venue/course ("put us at Pebble Beach specifically" on HHQ; "book Nobu" on MOH) → `unmet` + Swap pointer, NOT a destination change.
+  6. Foreign/off-catalog: MOH/BMHQ "let's go to Paris" → `unmet` (US-only); HHQ "take us to Scotland" → applies `region:"International"` + `states:["Scotland"]` and rebuilds a REAL international plan (not a degraded/fallback one — handoff #3).
+  7. Already-set honesty: request the current value → `patch:{}` + honest "already set that way" unmet (names current value), NOT the generic no-op note.
+  8. Ambiguous directionless ("make it fancier") → `patch:{}` + no-op fallback note in the CORRECT brand vocab (HHQ note must be golf-worded — the bug this extraction fixed).
+
+  Q&A matrix (per site):
+  9. Answer strictly from plan data (ask about a real venue/time in the generated plan) → correct verbatim.
+  10. Weather ("what's the weather that weekend?") → DECLINED, no forecast invented.
+  11. Exact price ("what's the cost per person?") → the EXACT figure from the plan, no rounding/estimate.
+  12. No-estimate ("roughly what will Ubers cost?") → declines to ballpark; no invented number.
+  13. Change request via Q&A ("can you swap the hotel?") → declines, points to the refine box / Swap.
+  14. HHQ only: a weekday question ("what do we do Saturday?") → does NOT guess which day maps to Saturday (Day 1/Day 2 labeling ban).
+
+  Record every case in the verification log with the actual response + PASS/FAIL and the planId used. Any FAIL is a real regression — stop and fix before declaring done.
+
+- [ ] **Step 4: Real-user POV audit (per site)**
+
+Beyond the matrix, one holistic pass per site as a real user: generate → view the itinerary → open the refine box → make a change → confirm the plan visibly rebuilds and the changed field is reflected in the rendered plan (not just the API) → open "Ask about this trip" → ask 2 real questions → confirm answers match what's on screen. Note any UX friction (handoff #6: refine box discoverability/slide-over), broken states, or answer/plan mismatch. Confirm the refine box is owner-only and Q&A is read-only for every audience.
+
+- [ ] **Step 5: Prove the drift is gone (single source of truth)**
 
 Run: `for p in maid-of-honor-hq plan-my-party handicap-hq; do echo "== $p =="; wc -l ~/$p/src/lib/refine-plan.ts ~/$p/src/lib/trip-qa.ts; done`
 Expected: each `refine-plan.ts`/`trip-qa.ts` is now a thin config+wrapper (far shorter than the ~276/~96 originals). The algorithm + guardrail skeleton exists in exactly ONE place (`shared-engine/src/chat`).
 
-- [ ] **Step 4: Update memory + close the handoff**
+- [ ] **Step 6: Update memory + close the handoff**
 
 - Update `[[project_moh_nl_refine_box_0720]]`: the "REMAINING: lift refine()/trip-qa() into shared-engine" item is DONE; note `src/chat` module + the three thin consumers + HHQ took the dep + golf no-op-note bug fixed.
 - Mark handoff item #1 complete in `~/work/handoffs/2026-07-21-chatbots-next-steps.md` (items #2-#7 remain).
