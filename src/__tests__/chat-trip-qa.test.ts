@@ -54,4 +54,21 @@ describe("chat/trip-qa", () => {
     );
     expect(r.answer).toContain("couldn't find that in this plan");
   });
+
+  it("uses config.systemPrompt verbatim when provided, else the shared skeleton", async () => {
+    let sawSystem = "";
+    const capture = async (a: { system: string; prompt: string }) => { sawSystem = a.system; return "ok"; };
+    // override present → used verbatim
+    await answerTripQuestion<unknown, { x: number }>(
+      { x: 1 }, "q",
+      { generate: capture, config: { pickViewedPlan: () => null, serializePlan: () => "{}", tripNoun: "golf trip", systemPrompt: "CUSTOM-BRAND-PROMPT-XYZ" } },
+    );
+    expect(sawSystem).toBe("CUSTOM-BRAND-PROMPT-XYZ");
+    // override absent → shared skeleton (contains an invariant ban)
+    await answerTripQuestion<unknown, { x: number }>(
+      { x: 1 }, "q",
+      { generate: capture, config: { pickViewedPlan: () => null, serializePlan: () => "{}", tripNoun: "golf trip" } },
+    );
+    expect(sawSystem).toContain("NEVER describe weather");
+  });
 });

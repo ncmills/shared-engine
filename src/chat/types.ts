@@ -57,6 +57,10 @@ export interface QAConfig<TStored, TPlan> {
   pickViewedPlan: (stored: TStored, dest?: string, tier?: string) => TPlan | null;
   /** Compact answerable slice of the plan — the ONLY facts the model may use. */
   serializePlan: (plan: TPlan, timing?: string) => string;
+  /** Optional brand-owned full Q&A system prompt. When set, it REPLACES the shared
+   *  skeleton (buildQASystemPrompt) verbatim — use for a brand whose prompt diverges
+   *  beyond tripNoun/extraGuardrails (e.g. HHQ's golf framing). MOH/BMHQ omit it. */
+  systemPrompt?: string;
   /** e.g. "bachelorette trip" | "golf trip". */
   tripNoun: string;
   /** Extra brand guardrails appended after the invariant bans (e.g. HHQ day-labeling ban). */

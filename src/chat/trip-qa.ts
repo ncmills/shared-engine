@@ -37,7 +37,7 @@ export async function answerTripQuestion<TStored, TPlan>(
   opts: { generate: QAGenerate; config: QAConfig<TStored, TPlan>; timing?: string },
 ): Promise<QAResult> {
   const raw = await opts.generate({
-    system: buildQASystemPrompt(opts.config),
+    system: opts.config.systemPrompt ?? buildQASystemPrompt(opts.config),
     prompt: ["TRIP DATA:", opts.config.serializePlan(plan, opts.timing), "", "QUESTION:", question.trim(), "", "Answer from the TRIP DATA only:"].join("\n"),
   });
   const answer = (raw ?? "").trim();
