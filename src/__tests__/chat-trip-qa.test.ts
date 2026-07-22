@@ -19,7 +19,7 @@ describe("chat/trip-qa", () => {
     expect(p).toContain("1. Answer ONLY using the TRIP DATA provided. Every fact (venue, price, time, address, activity) must");
     expect(p).toContain("   come from that data verbatim. NEVER invent, guess, or add venues, prices, or details not present.");
 
-    expect(p).toContain("NEVER describe weather"); // invariant ban retained (rule 2)
+    expect(p).toContain("restate a weather forecast, temperature, or climate detail"); // invariant weather ban (rule 2)
 
     // Rule 3 — no-mutation; direct to the refine box instead.
     expect(p).toContain("3. Do NOT change the trip. If asked to modify it (different city, drop a night, swap a venue), say you");
@@ -69,6 +69,6 @@ describe("chat/trip-qa", () => {
       { x: 1 }, "q",
       { generate: capture, config: { pickViewedPlan: () => null, serializePlan: () => "{}", tripNoun: "golf trip" } },
     );
-    expect(sawSystem).toContain("NEVER describe weather");
+    expect(sawSystem).toContain("restate a weather forecast, temperature, or climate detail");
   });
 });
