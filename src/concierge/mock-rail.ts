@@ -1,4 +1,4 @@
-import type { BookingRail, RailSearchQuery, HoldResult, BookResult } from "./rail";
+import { RailRejectedError, type BookingRail, type RailSearchQuery, type HoldResult, type BookResult } from "./rail";
 import type { RailSlot, CancellationPolicy, BookingStatus } from "./types";
 
 function hashStr(s: string): number {
@@ -86,7 +86,9 @@ export class MockRail implements BookingRail {
   async book(holdRef: string, _ctx: { leadName: string; leadEmail: string }): Promise<BookResult> {
     const slotId = this.holdToSlot.get(holdRef) ?? holdRef.replace(/^hold-/, "");
     if (this.opts.failBookFor?.includes(slotId)) {
-      throw new Error(`MockRail: booking refused for ${slotId}`);
+      // A REFUSAL is definitive — the rail did not create anything. Modelled as such so the
+      // orchestrator stays free to retry it, rather than wedging it into reconciliation.
+      throw new RailRejectedError(`MockRail: booking refused for ${slotId}`);
     }
     const railRef = `ref-${slotId}`;
     this.booked.add(railRef);

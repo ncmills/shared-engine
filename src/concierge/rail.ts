@@ -20,6 +20,22 @@ export interface BookResult {
   amountCents: number;
 }
 
+/** Thrown by an adapter when the rail DEFINITIVELY did not create a booking — a 4xx with a body
+ *  saying so, a validation refusal, a sold-out rate. The distinction is money-critical: any OTHER
+ *  throw from `book()` (timeout, socket hang-up, 5xx, DNS) is AMBIGUOUS — the supplier may well
+ *  have committed and only the response was lost — and the engine must treat it as in-flight rather
+ *  than as a clean failure it is free to retry.
+ *
+ *  Default to NOT throwing this. An ambiguous error mis-labelled as definitive causes a double
+ *  charge; a definitive error left ambiguous only costs a reconciliation. */
+export class RailRejectedError extends Error {
+  readonly definitive = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "RailRejectedError";
+  }
+}
+
 /** Every rail (mock, OpenTable, LiteAPI, GetYourGuide) implements this. */
 export interface BookingRail {
   readonly railId: string;
