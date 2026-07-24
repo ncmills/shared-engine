@@ -255,13 +255,33 @@ export class Orchestrator {
   /** Phase 2a path: STAGED commit. Hold everything (no commitment), assemble + validate spend
    *  caps, then commit shortest-hold-TTL-first. Any failure unwinds: compensate booked items +
    *  release still-uncommitted holds. Ends CONFIRMED or FAILED; deterministic + audit-logged.
-   *  NOT retry-safe: unlike executeSaga there is no idempotency short-circuit, so re-running a
-   *  partially-committed trip re-holds/re-books. Retry-safety lands with the transactional outbox
-   *  + persistence in Phase 2c; until then call this exactly once per trip. */
+   *
+   *  RETRY-SAFE as of Phase 2c: an item with a `confirmed` record in the store is already money
+   *  spent, so it is neither re-held nor re-booked — its stored confirmation is replayed instead.
+   *  Re-running a partially-committed trip resumes it rather than duplicating it. Only `confirmed`
+   *  short-circuits; a `failed` record is a transient error we are entitled to retry for real.
+   *  Durability is the store's job, not the orchestrator's — swap in a persistent BookingStore and
+   *  this logic is unchanged (Supabase-backed store still deferred). */
   async executeStaged(manifest: BookingManifest, ctx: StagedCtx): Promise<StagedResult> {
     const actor = ctx.actor ?? "orchestrator";
     const results: BookingResult[] = [];
     const held: HeldItem[] = [];
+
+    // --- IDEMPOTENCY: what did a previous run of this trip already commit? ---
+    // Keyed by the deterministic bookingRecordId, scoped to THIS rail — the same itemId booked on a
+    // different rail is a different commitment.
+    const priorConfirmed = new Map<string, BookingRecord>();
+    /** Items whose `book` was ENTERED but never resolved — see the write-before-act marker in the
+     *  commit loop. We genuinely do not know whether the money moved, so we refuse to guess. */
+    const priorInFlight = new Map<string, BookingRecord>();
+    for (const rec of await this.store.all(manifest.tripId)) {
+      if (rec.rail !== this.rail.railId) continue;
+      if (rec.status === "confirmed") priorConfirmed.set(rec.itemId, rec);
+      else if (rec.status === "held" && !rec.railRef) priorInFlight.set(rec.itemId, rec);
+    }
+    /** Already-paid spend, which still counts against the caps — otherwise a retry loop would be a
+     *  way to walk past the budget one item at a time. */
+    const settled: { category: BookingCategory; priceCents: number }[] = [];
 
     const unwind = async (
       error: string,
@@ -276,6 +296,23 @@ export class Orchestrator {
     // --- HELD: reserve every item, no commitment yet ---
     for (const item of manifest.items) {
       const { itemId, category } = item.intent;
+      // Already bought on a previous run: replay it, never touch the rail again. This must come
+      // before the `!item.chosen` guard — a confirmed booking stands even if the manifest that
+      // produced it can no longer re-resolve a candidate.
+      const done = priorConfirmed.get(itemId);
+      if (done) {
+        settled.push({ category, priceCents: done.amountCents });
+        results.push({ itemId, status: "confirmed", confirmationCode: done.confirmationCode, error: null });
+        continue;
+      }
+      // Ambiguous: a previous run entered book() for this item and never recorded the outcome. The
+      // booking may exist on the rail. Re-booking risks charging twice; skipping risks stranding a
+      // live booking. Both are worse than stopping, so stop — loudly, with the id to reconcile.
+      const inFlight = priorInFlight.get(itemId);
+      if (inFlight) {
+        const msg = `item ${itemId}: in-flight booking ${inFlight.id} from a previous run never resolved — reconcile against the rail before retrying`;
+        return unwind(msg, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
+      }
       if (!item.chosen) {
         const id = bookingRecordId(manifest.tripId, itemId, this.rail.railId);
         await this.store.put({ id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: "no candidate chosen" });
@@ -320,7 +357,10 @@ export class Orchestrator {
     }
 
     // --- PENDING_CONFIRM: assemble priced trip + spend caps ---
-    const capError = checkSpendCaps(held.map((h) => ({ category: h.category, priceCents: h.priceCents })), ctx.caps);
+    const capError = checkSpendCaps(
+      [...settled, ...held.map((h) => ({ category: h.category, priceCents: h.priceCents }))],
+      ctx.caps,
+    );
     if (capError) {
       return unwind(capError, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
     }
@@ -342,6 +382,12 @@ export class Orchestrator {
         results.push({ itemId: h.itemId, status: "failed", confirmationCode: null, error: "hold expired" });
         return unwind(`hold ${h.holdRef} expired at ${h.expiresAt}`, booked, uncommitted);
       }
+
+      // WRITE-BEFORE-ACT: mark the item in-flight BEFORE the irreversible call. If the process dies
+      // between book() and the confirmed write below, this record is the only evidence that money
+      // may have moved — without it a retry re-books blind. `railRef: null` is what distinguishes
+      // "we started" from "we finished"; the next run refuses to guess and asks for reconciliation.
+      await this.store.put({ id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "held", railRef: null, confirmationCode: null, amountCents: h.priceCents, error: null });
 
       try {
         const bookedRes = await this.rail.book(h.holdRef, ctx.lead);
