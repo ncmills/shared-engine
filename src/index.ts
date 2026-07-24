@@ -15,4 +15,5 @@ export * from './vid';
 export * from './derive';
 export * from './lead-profile';
 export * from './room';
+export * from './chat';
 export * from './concierge';
