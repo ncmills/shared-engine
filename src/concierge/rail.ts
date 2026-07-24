@@ -32,4 +32,13 @@ export interface BookingRail {
    *  unknown/expired hold should resolve, not throw, where the rail allows. */
   release(holdRef: string): Promise<void>;
   status(railRef: string): Promise<BookingStatus>;
+  /** OPTIONAL reconciliation capability (Phase 2c). Answers "did a booking result from THIS holdRef?"
+   *  for the crash window between `book()` being called and its result being recorded — the one case
+   *  where `status(railRef)` is useless, because the railRef is precisely what we lost.
+   *
+   *  Return the BookResult if the rail did create a booking, or `null` if it provably did not.
+   *  THROW if the rail cannot say — never return null on uncertainty, because the engine treats null
+   *  as "safe to book". Rails that cannot answer at all should leave this undefined: the engine then
+   *  refuses to guess and asks for human reconciliation, which is the correct degraded behaviour. */
+  reconcile?(holdRef: string): Promise<BookResult | null>;
 }

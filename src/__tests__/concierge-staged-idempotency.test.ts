@@ -5,6 +5,7 @@ import { resolveManifest, DeterministicProposalSource } from "../concierge/resol
 import { MockRail } from "../concierge/mock-rail";
 import { bookingRecordId } from "../concierge/types";
 import type { BookingIntent } from "../concierge/types";
+import type { BookingRail } from "../concierge/rail";
 
 // Phase 2c — retry-safety. `executeStaged`'s doc comment said "call this exactly once per trip",
 // which is a comment, not a guard. A caller that times out mid-commit and retries would ask the rail
@@ -28,7 +29,27 @@ class CountingRail extends MockRail {
   }
 }
 
-const manifestFor = (rail: MockRail) =>
+/** A rail with NO reconciliation capability — the real shape of a partner API that can't answer
+ *  "did this holdRef produce a booking?". Delegates everything else to a CountingRail. */
+class NoReconcileRail implements BookingRail {
+  private readonly inner: CountingRail;
+  readonly railId: string;
+  constructor(opts: ConstructorParameters<typeof CountingRail>[0]) {
+    this.inner = new CountingRail(opts);
+    this.railId = this.inner.railId;
+  }
+  get bookCalls() { return this.inner.bookCalls; }
+  search: BookingRail["search"] = (q) => this.inner.search(q);
+  getCancellationPolicy: BookingRail["getCancellationPolicy"] = () => this.inner.getCancellationPolicy();
+  hold: BookingRail["hold"] = (id, c) => this.inner.hold(id, c);
+  book: BookingRail["book"] = (ref, c) => this.inner.book(ref, c);
+  cancel: BookingRail["cancel"] = (ref) => this.inner.cancel(ref);
+  release: BookingRail["release"] = (ref) => this.inner.release(ref);
+  status: BookingRail["status"] = (ref) => this.inner.status(ref);
+  // `reconcile` deliberately absent.
+}
+
+const manifestFor = (rail: BookingRail) =>
   resolveManifest({ tripId: "trip-1", tenant: "moh", intents, rail, proposals: new DeterministicProposalSource() });
 
 describe("executeStaged retry-safety (Phase 2c)", () => {
@@ -174,6 +195,97 @@ describe("executeStaged retry-safety (Phase 2c)", () => {
     expect(staged.state).toBe("FAILED");
     expect(staged.error).toMatch(/in-flight|reconcile/i);
     expect(rail.bookCalls).toHaveLength(0); // nothing re-booked on a guess
+  });
+
+  it("reconciles an in-flight item the rail DID book: adopts it, never re-books", async () => {
+    // The crash window resolved automatically. The rail confirms a booking exists for our holdRef,
+    // so we adopt it into the record instead of asking a human.
+    const rail = new CountingRail({ priceCents: 8500 });
+    const store = new InMemoryBookingStore();
+    const manifest = await manifestFor(rail);
+    // Take the real hold, book it, then simulate the crash: the confirmed write never happened, so
+    // the store still shows in-flight.
+    const held = await rail.hold(manifest.items[0]!.chosen!.railSlotId, { partySize: 6, dateTime: "2026-08-01T15:00:00Z" });
+    await rail.book(held.holdRef, lead);
+    rail.bookCalls.length = 0; // reset: only the retry's calls matter now
+    await store.put({
+      id: bookingRecordId("trip-1", "stay-1", rail.railId),
+      tripId: "trip-1", itemId: "stay-1", rail: rail.railId,
+      status: "held", railRef: null, confirmationCode: null, amountCents: 8500, error: null,
+      holdRef: held.holdRef,
+    });
+
+    const staged = await new Orchestrator(rail, store, new InMemoryAuditLog()).executeStaged(manifest, { lead, now });
+
+    expect(staged.state).toBe("CONFIRMED");
+    expect(rail.bookCalls).toHaveLength(1); // tour-1 only — stay-1 was adopted, not re-booked
+    const rec = await store.get(bookingRecordId("trip-1", "stay-1", rail.railId));
+    expect(rec?.status).toBe("confirmed");
+    expect(rec?.railRef).toBeTruthy(); // the ref we'd lost is now recorded, so cancel() can target it
+  });
+
+  it("reconciles an in-flight item the rail did NOT book: proceeds and books it once", async () => {
+    const rail = new CountingRail({ priceCents: 8500 });
+    const store = new InMemoryBookingStore();
+    const manifest = await manifestFor(rail);
+    // A holdRef that was never booked — the crash happened before the rail acted.
+    await store.put({
+      id: bookingRecordId("trip-1", "stay-1", rail.railId),
+      tripId: "trip-1", itemId: "stay-1", rail: rail.railId,
+      status: "held", railRef: null, confirmationCode: null, amountCents: 8500, error: null,
+      holdRef: "hold-never-booked",
+    });
+
+    const audit = new InMemoryAuditLog();
+    const staged = await new Orchestrator(rail, store, audit).executeStaged(manifest, { lead, now });
+
+    expect(staged.state).toBe("CONFIRMED");
+    expect(rail.bookCalls).toHaveLength(2); // both booked for real, exactly once each
+    // The stale hold from the crashed run is dropped, not left stranding inventory on the rail.
+    const released = (await audit.entries("trip-1")).filter((e) => e.action === "release" && e.externalRef === "hold-never-booked");
+    expect(released).toHaveLength(1);
+  });
+
+  it("still fails loud when the rail cannot reconcile (capability absent)", async () => {
+    // Regression guard: graceful degradation to the fail-loud behaviour, never a blind re-book.
+    const rail = new NoReconcileRail({ priceCents: 8500 });
+    const store = new InMemoryBookingStore();
+    const manifest = await manifestFor(rail);
+    await store.put({
+      id: bookingRecordId("trip-1", "stay-1", rail.railId),
+      tripId: "trip-1", itemId: "stay-1", rail: rail.railId,
+      status: "held", railRef: null, confirmationCode: null, amountCents: 8500, error: null,
+      holdRef: "hold-whatever",
+    });
+
+    const staged = await new Orchestrator(rail, store, new InMemoryAuditLog()).executeStaged(manifest, { lead, now });
+
+    expect(staged.state).toBe("FAILED");
+    expect(staged.error).toMatch(/in-flight|reconcile/i);
+    expect(rail.bookCalls).toHaveLength(0);
+  });
+
+  it("fails loud when reconciliation itself throws — never guesses on a rail error", async () => {
+    class ThrowingReconcileRail extends CountingRail {
+      override async reconcile(): Promise<never> {
+        throw new Error("rail 503 during reconcile");
+      }
+    }
+    const rail = new ThrowingReconcileRail({ priceCents: 8500 });
+    const store = new InMemoryBookingStore();
+    const manifest = await manifestFor(rail);
+    await store.put({
+      id: bookingRecordId("trip-1", "stay-1", rail.railId),
+      tripId: "trip-1", itemId: "stay-1", rail: rail.railId,
+      status: "held", railRef: null, confirmationCode: null, amountCents: 8500, error: null,
+      holdRef: "hold-whatever",
+    });
+
+    const staged = await new Orchestrator(rail, store, new InMemoryAuditLog()).executeStaged(manifest, { lead, now });
+
+    expect(staged.state).toBe("FAILED");
+    expect(staged.error).toMatch(/reconcile/i);
+    expect(rail.bookCalls).toHaveLength(0);
   });
 
   it("counts already-confirmed spend against the caps on a retry", async () => {

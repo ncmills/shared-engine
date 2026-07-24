@@ -11,6 +11,12 @@ export interface AuditEntry {
     /** Phase 2c: the hold SUCCEEDED but locked a price above the quote beyond tolerance, so the trip
      *  was aborted and the hold released. Distinct from `hold_failed` (the rail refused the hold). */
     | "price_drift_rejected"
+    /** Phase 2c: an in-flight booking from a crashed run was resolved against the rail — either
+     *  adopted as confirmed, or proven not to exist. */
+    | "reconciled"
+    /** Phase 2c: reconciliation was impossible (no capability / no holdRef / rail errored). The trip
+     *  stops here and a human resolves it. */
+    | "reconcile_failed"
     | "book"
     | "book_failed"
     | "compensate"

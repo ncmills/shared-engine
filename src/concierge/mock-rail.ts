@@ -113,4 +113,13 @@ export class MockRail implements BookingRail {
   async status(railRef: string): Promise<BookingStatus> {
     return this.booked.has(railRef) ? "confirmed" : "cancelled";
   }
+
+  /** Reconciliation capability — mirrors `book`'s holdRef→railRef derivation, then reports whether
+   *  that booking actually exists. Deterministic; no guessing. */
+  async reconcile(holdRef: string): Promise<BookResult | null> {
+    const slotId = this.holdToSlot.get(holdRef) ?? holdRef.replace(/^hold-/, "");
+    const railRef = `ref-${slotId}`;
+    if (!this.booked.has(railRef)) return null;
+    return { railRef, confirmationCode: `MOCK-${slotId}`, amountCents: this.opts.priceCents ?? 0 };
+  }
 }

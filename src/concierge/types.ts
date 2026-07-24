@@ -56,6 +56,9 @@ export interface BookingRecord {
   confirmationCode: string | null;
   amountCents: number;
   error: string | null;
+  /** The hold this record's `book()` was called against. Written with the in-flight marker so the
+   *  crash window is reconcilable: `railRef` is what we lost, `holdRef` is what we still know. */
+  holdRef?: string | null;
 }
 
 export interface BookingResult {

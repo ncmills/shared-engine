@@ -261,7 +261,13 @@ export class Orchestrator {
    *  Re-running a partially-committed trip resumes it rather than duplicating it. Only `confirmed`
    *  short-circuits; a `failed` record is a transient error we are entitled to retry for real.
    *  Durability is the store's job, not the orchestrator's — swap in a persistent BookingStore and
-   *  this logic is unchanged (Supabase-backed store still deferred). */
+   *  this logic is unchanged (Supabase-backed store still deferred).
+   *
+   *  LIMIT — retry-safe is NOT concurrency-safe. Safety here comes from reading the store before
+   *  touching the rail, which protects SEQUENTIAL retries. Two executeStaged calls racing on the
+   *  same tripId both read "nothing confirmed" and both book. Making that safe needs a conditional
+   *  write / lease at the BookingStore level (compare-and-set on the record id), which is a store
+   *  concern and lands with the persistent store. Until then: one in-flight call per trip. */
   async executeStaged(manifest: BookingManifest, ctx: StagedCtx): Promise<StagedResult> {
     const actor = ctx.actor ?? "orchestrator";
     const results: BookingResult[] = [];
@@ -305,13 +311,48 @@ export class Orchestrator {
         results.push({ itemId, status: "confirmed", confirmationCode: done.confirmationCode, error: null });
         continue;
       }
-      // Ambiguous: a previous run entered book() for this item and never recorded the outcome. The
-      // booking may exist on the rail. Re-booking risks charging twice; skipping risks stranding a
-      // live booking. Both are worse than stopping, so stop — loudly, with the id to reconcile.
+      // Ambiguous: a previous run entered book() for this item and never recorded the outcome, so
+      // the booking may or may not exist on the rail. Ask the rail directly when it can answer.
       const inFlight = priorInFlight.get(itemId);
       if (inFlight) {
-        const msg = `item ${itemId}: in-flight booking ${inFlight.id} from a previous run never resolved — reconcile against the rail before retrying`;
-        return unwind(msg, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
+        const reconcileFailed = async (detail: string) => {
+          const msg = `item ${itemId}: in-flight booking ${inFlight.id} from a previous run never resolved — ${detail}`;
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "reconcile_failed", rail: this.rail.railId, externalRef: inFlight.holdRef ?? null, amountCents: 0, detail });
+          return unwind(msg, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
+        };
+        // No capability, or nothing to query with → refuse to guess (the 2c degraded path).
+        if (!this.rail.reconcile || !inFlight.holdRef) {
+          return reconcileFailed("rail cannot reconcile it; reconcile by hand before retrying");
+        }
+        let found;
+        try {
+          found = await this.rail.reconcile(inFlight.holdRef);
+        } catch (e) {
+          // A rail that errors during reconciliation has told us nothing. Uncertainty is never
+          // resolved in favour of spending money.
+          return reconcileFailed(`reconcile call failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        if (found) {
+          // The booking DID happen. Adopt it — recording the railRef we lost, which is what any
+          // later cancel()/status() needs to target.
+          const rec: BookingRecord = { id: inFlight.id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "confirmed", railRef: found.railRef, confirmationCode: found.confirmationCode, amountCents: found.amountCents, error: null, holdRef: inFlight.holdRef };
+          await this.store.put(rec);
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "reconciled", rail: this.rail.railId, externalRef: found.railRef, amountCents: found.amountCents, detail: "adopted an in-flight booking confirmed by the rail" });
+          settled.push({ category, priceCents: found.amountCents });
+          results.push({ itemId, status: "confirmed", confirmationCode: found.confirmationCode, error: null });
+          continue;
+        }
+        // Provably not booked → fall through and process this item normally. First drop the stale
+        // hold from the crashed run: this item is about to be held again, and leaving the old one
+        // live would strand inventory on the rail until it expired. A release failure must never
+        // abort the trip — the hold expires on its own; that path is already audited.
+        try {
+          await this.rail.release(inFlight.holdRef);
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "release", rail: this.rail.railId, externalRef: inFlight.holdRef, amountCents: 0, detail: "stale hold from a crashed run" });
+        } catch (e) {
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "release_failed", rail: this.rail.railId, externalRef: inFlight.holdRef, amountCents: 0, detail: e instanceof Error ? e.message : String(e) });
+        }
+        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "reconciled", rail: this.rail.railId, externalRef: inFlight.holdRef, amountCents: 0, detail: "rail confirms no booking resulted; safe to proceed" });
       }
       if (!item.chosen) {
         const id = bookingRecordId(manifest.tripId, itemId, this.rail.railId);
@@ -387,7 +428,7 @@ export class Orchestrator {
       // between book() and the confirmed write below, this record is the only evidence that money
       // may have moved — without it a retry re-books blind. `railRef: null` is what distinguishes
       // "we started" from "we finished"; the next run refuses to guess and asks for reconciliation.
-      await this.store.put({ id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "held", railRef: null, confirmationCode: null, amountCents: h.priceCents, error: null });
+      await this.store.put({ id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "held", railRef: null, confirmationCode: null, amountCents: h.priceCents, error: null, holdRef: h.holdRef });
 
       try {
         const bookedRes = await this.rail.book(h.holdRef, ctx.lead);
