@@ -85,7 +85,7 @@ export class LiteAPIAdapter implements BookingRail {
       // booking ref exists yet, so throwing is safe — executeStaged catches it and unwinds.
       throw new Error(`LiteAPI prebook ${railSlotId} returned no usable (USD, >0) price`);
     }
-    if (typeof data.prebookId !== "string" || data.prebookId.length === 0) {
+    if (typeof data.prebookId !== "string" || data.prebookId.trim().length === 0) {
       throw new Error(`LiteAPI prebook ${railSlotId} returned no prebookId`);
     }
     return {
@@ -102,10 +102,16 @@ export class LiteAPIAdapter implements BookingRail {
   }
 
   async book(holdRef: string, ctx: { leadName: string; leadEmail: string }): Promise<BookResult> {
-    const data = await this.req(`/rates/book`, { method: "POST", body: JSON.stringify({ prebookId: holdRef, holder: { name: ctx.leadName, email: ctx.leadEmail } }) });
+    // Idempotency-Key derived from the prebook — a replayed book() is deduped by LiteAPI rather
+    // than creating a second stay, and it is what makes a reconcile lookup answerable.
+    const data = await this.req(`/rates/book`, {
+      method: "POST",
+      headers: { "idempotency-key": holdRef },
+      body: JSON.stringify({ prebookId: holdRef, holder: { name: ctx.leadName, email: ctx.leadEmail } }),
+    });
     // MONEY-SAFETY (no ref): a null/empty booking id means NOTHING was booked — refuse to return a
     // ref that a later status()/cancel() would target. Safe to throw (there is nothing to orphan).
-    if (typeof data.bookingId !== "string" || data.bookingId.length === 0) {
+    if (typeof data.bookingId !== "string" || data.bookingId.trim().length === 0) {
       throw new Error(`LiteAPI book returned a missing booking id for prebook ${holdRef}`);
     }
     // MONEY-SAFETY (live ref): once a booking id EXISTS the stay is booked and charged. We must NOT

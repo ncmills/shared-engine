@@ -228,12 +228,15 @@ describe("executeStaged retry-safety (Phase 2c)", () => {
     const rail = new CountingRail({ priceCents: 8500 });
     const store = new InMemoryBookingStore();
     const manifest = await manifestFor(rail);
-    // A holdRef that was never booked — the crash happened before the rail acted.
+    // A hold the rail genuinely TOOK but never booked — the crash landed before book() acted. The
+    // rail can therefore positively answer "not booked" (as opposed to a holdRef it never issued,
+    // which is `unknown` and correctly fails loud — covered by the capability-absent test below).
+    const staleHold = await rail.hold(manifest.items[0]!.chosen!.railSlotId, { partySize: 6, dateTime: "2026-08-01T15:00:00Z" });
     await store.put({
       id: bookingRecordId("trip-1", "stay-1", rail.railId),
       tripId: "trip-1", itemId: "stay-1", rail: rail.railId,
       status: "held", railRef: null, confirmationCode: null, amountCents: 8500, error: null,
-      holdRef: "hold-never-booked",
+      holdRef: staleHold.holdRef,
     });
 
     const audit = new InMemoryAuditLog();
@@ -242,7 +245,7 @@ describe("executeStaged retry-safety (Phase 2c)", () => {
     expect(staged.state).toBe("CONFIRMED");
     expect(rail.bookCalls).toHaveLength(2); // both booked for real, exactly once each
     // The stale hold from the crashed run is dropped, not left stranding inventory on the rail.
-    const released = (await audit.entries("trip-1")).filter((e) => e.action === "release" && e.externalRef === "hold-never-booked");
+    const released = (await audit.entries("trip-1")).filter((e) => e.action === "release" && e.externalRef === staleHold.holdRef);
     expect(released).toHaveLength(1);
   });
 

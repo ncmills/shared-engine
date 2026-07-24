@@ -334,14 +334,18 @@ export class Orchestrator {
         if (!this.rail.reconcile || !inFlight.holdRef) {
           return reconcileFailed("rail cannot reconcile it; reconcile by hand before retrying");
         }
-        let found;
+        let outcome;
         try {
-          found = await this.rail.reconcile(inFlight.holdRef);
+          outcome = await this.rail.reconcile(inFlight.holdRef);
         } catch (e) {
           // A rail that errors during reconciliation has told us nothing. Uncertainty is never
           // resolved in favour of spending money.
           return reconcileFailed(`reconcile call failed: ${e instanceof Error ? e.message : String(e)}`);
         }
+        if (outcome.outcome === "unknown") {
+          return reconcileFailed(`rail could not determine the outcome${outcome.detail ? `: ${outcome.detail}` : ""}; reconcile by hand before retrying`);
+        }
+        const found = outcome.outcome === "booked" ? outcome.result : null;
         if (found) {
           // The booking DID happen. Adopt it — recording the railRef we lost, which is what any
           // later cancel()/status() needs to target.
@@ -445,7 +449,16 @@ export class Orchestrator {
         const bookedRes = await this.rail.book(h.holdRef, ctx.lead);
         booked.push({ itemId: h.itemId, railRef: bookedRes.railRef });
         committedOrder.push(h.itemId);
-        const rec: BookingRecord = { id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "confirmed", railRef: bookedRes.railRef, confirmationCode: bookedRes.confirmationCode, amountCents: bookedRes.amountCents, error: null };
+        // MONEY-SAFETY: an adapter may legitimately fail to parse the booked amount and return 0
+        // rather than throw (throwing once a ref exists would orphan a paid booking). But recording
+        // that 0 poisons the caps: on a retry it enters `settled` as zero already-spent, letting a
+        // loop walk past the budget. The LOCKED hold price is the best figure we have and the one
+        // the cap gate already approved, so fall back to it rather than persisting a known-wrong 0.
+        const recordedCents = Number.isFinite(bookedRes.amountCents) && bookedRes.amountCents > 0 ? bookedRes.amountCents : h.priceCents;
+        if (recordedCents !== bookedRes.amountCents) {
+          await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book", rail: this.rail.railId, externalRef: bookedRes.railRef, amountCents: recordedCents, detail: `rail returned an unusable amount (${bookedRes.amountCents}); recorded the locked hold price instead` });
+        }
+        const rec: BookingRecord = { id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "confirmed", railRef: bookedRes.railRef, confirmationCode: bookedRes.confirmationCode, amountCents: recordedCents, error: null };
         await this.store.put(rec);
         await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book", rail: this.rail.railId, externalRef: bookedRes.railRef, amountCents: bookedRes.amountCents });
         results.push({ itemId: h.itemId, status: "confirmed", confirmationCode: bookedRes.confirmationCode, error: null });
@@ -468,7 +481,12 @@ export class Orchestrator {
         }
         await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book_failed", rail: this.rail.railId, externalRef: definitive ? null : h.holdRef, amountCents: 0, detail: definitive ? msg : `${msg} (AMBIGUOUS — booking may exist; left in-flight for reconciliation)` });
         results.push({ itemId: h.itemId, status: "failed", confirmationCode: null, error: msg });
-        return unwind(msg, booked, uncommitted);
+        // On an AMBIGUOUS failure this item's own hold must NOT be released: it may already have
+        // become a booking, releasing it is semantically wrong, and the holdRef is the only handle
+        // reconciliation has. Every OTHER uncommitted hold is still dropped. A definitive rejection
+        // created nothing, so its hold is released as usual.
+        const toRelease = definitive ? uncommitted : uncommitted.filter((x) => x.itemId !== h.itemId);
+        return unwind(msg, booked, toRelease);
       }
     }
 

@@ -9,7 +9,7 @@ function fakeFetch(): typeof fetch {
     if (u.includes("/tours") && (!init || init.method === undefined || init.method === "GET")) {
       return json({ tours: [{ id: "tour-1", title: "Sunset Kayak", price_cents: 8500, start_time: "2026-08-01T14:00:00Z", cancellation: { refundable: true, free_until: "2026-07-30T00:00:00Z", refund_cents: 8500 } }] });
     }
-    if (u.includes("/reservations") && init?.method === "POST") return json({ reservation_id: "gyg-res-1", expires_at: "2026-08-01T13:30:00Z" });
+    if (u.includes("/reservations") && init?.method === "POST") return json({ reservation_id: "gyg-res-1", expires_at: "2026-08-01T13:30:00Z", price_cents: 8500 });
     if (u.includes("/bookings") && init?.method === "POST") return json({ booking_id: "gyg-book-1", voucher_code: "GYG-XYZ", amount_cents: 8500 });
     if (u.includes("/bookings/") && init?.method === "DELETE") return json({ refund_cents: 8500 });
     if (u.includes("/bookings/")) return json({ status: "confirmed" });
