@@ -52,9 +52,25 @@ export interface BookingRail {
    *  for the crash window between `book()` being called and its result being recorded — the one case
    *  where `status(railRef)` is useless, because the railRef is precisely what we lost.
    *
-   *  Return the BookResult if the rail did create a booking, or `null` if it provably did not.
-   *  THROW if the rail cannot say — never return null on uncertainty, because the engine treats null
-   *  as "safe to book". Rails that cannot answer at all should leave this undefined: the engine then
-   *  refuses to guess and asks for human reconciliation, which is the correct degraded behaviour. */
-  reconcile?(holdRef: string): Promise<BookResult | null>;
+   *  Returns a THREE-valued outcome, deliberately. The original signature was `BookResult | null`,
+   *  which made "provably not booked" and "I cannot tell" the same value — and the type system
+   *  rewarded the dangerous one, because `return null` is the obvious not-found branch an
+   *  implementer reaches for on a 404. A 404 from a partner routinely means read-replica lag on a
+   *  just-created booking, not absence. `unknown` now has to be constructed deliberately, and a
+   *  reviewer can grep for it.
+   *
+   *  Asymmetry to keep in mind while implementing: a wrong `not_booked` makes the engine release the
+   *  hold and book again — a double charge on a non-refundable rate. A wrong `unknown` costs a
+   *  manual reconciliation. When in doubt, return `unknown`. */
+  reconcile?(holdRef: string): Promise<ReconcileOutcome>;
 }
+
+/** Three-valued reconciliation result — see `BookingRail.reconcile`. */
+export type ReconcileOutcome =
+  /** The rail confirms a booking exists for this hold. */
+  | { outcome: "booked"; result: BookResult }
+  /** The rail can positively demonstrate no booking was created. Only return this when the rail
+   *  genuinely knows — never as a stand-in for "I looked and didn't find it". */
+  | { outcome: "not_booked" }
+  /** The rail cannot determine the answer. The engine will stop and ask for human reconciliation. */
+  | { outcome: "unknown"; detail?: string };

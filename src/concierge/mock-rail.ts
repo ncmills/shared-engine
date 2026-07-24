@@ -1,4 +1,4 @@
-import { RailRejectedError, type BookingRail, type RailSearchQuery, type HoldResult, type BookResult } from "./rail";
+import { RailRejectedError, type BookingRail, type RailSearchQuery, type HoldResult, type BookResult, type ReconcileOutcome } from "./rail";
 import type { RailSlot, CancellationPolicy, BookingStatus } from "./types";
 
 function hashStr(s: string): number {
@@ -116,12 +116,19 @@ export class MockRail implements BookingRail {
     return this.booked.has(railRef) ? "confirmed" : "cancelled";
   }
 
-  /** Reconciliation capability — mirrors `book`'s holdRef→railRef derivation, then reports whether
-   *  that booking actually exists. Deterministic; no guessing. */
-  async reconcile(holdRef: string): Promise<BookResult | null> {
-    const slotId = this.holdToSlot.get(holdRef) ?? holdRef.replace(/^hold-/, "");
+  /** Reconciliation capability. Honest about the limits of its own knowledge: this rail's state is
+   *  in-process, so a hold it has never seen (a different instance — i.e. exactly the post-crash
+   *  case reconciliation exists for) yields `unknown`, NOT `not_booked`. The earlier version
+   *  string-surgeried any holdRef into a railRef and answered `null`, which meant a fresh instance
+   *  confidently reported "definitely not booked" for a booking that definitely existed — the very
+   *  contract violation that would cause a double charge in a real adapter. */
+  async reconcile(holdRef: string): Promise<ReconcileOutcome> {
+    const slotId = this.holdToSlot.get(holdRef);
+    if (slotId === undefined) {
+      return { outcome: "unknown", detail: `MockRail has no record of hold ${holdRef} (different process/instance)` };
+    }
     const railRef = `ref-${slotId}`;
-    if (!this.booked.has(railRef)) return null;
-    return { railRef, confirmationCode: `MOCK-${slotId}`, amountCents: this.opts.priceCents ?? 0 };
+    if (!this.booked.has(railRef)) return { outcome: "not_booked" };
+    return { outcome: "booked", result: { railRef, confirmationCode: `MOCK-${slotId}`, amountCents: this.opts.priceCents ?? 0 } };
   }
 }
