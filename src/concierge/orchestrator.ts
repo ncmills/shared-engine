@@ -1,4 +1,4 @@
-import type { BookingRail } from "./rail";
+import { RailRejectedError, type BookingRail } from "./rail";
 import type { BookingManifest, BookingRecord, BookingResult, BookingCategory } from "./types";
 import { bookingRecordId } from "./types";
 import { InMemoryAuditLog, type AuditLog } from "./audit";
@@ -288,13 +288,22 @@ export class Orchestrator {
     /** Already-paid spend, which still counts against the caps — otherwise a retry loop would be a
      *  way to walk past the budget one item at a time. */
     const settled: { category: BookingCategory; priceCents: number }[] = [];
+    /** MONEY-SAFETY (2c review, CRITICAL 2): bookings that are already live on the rail from an
+     *  EARLIER run — replayed from `priorConfirmed` or adopted by reconcile. They must stay subject
+     *  to compensation, exactly as `executeSaga` does, or a FAILED retry silently abandons a paid
+     *  booking with `compensations: []` and `failedCompensations: []` (so even the stuck-trip alert
+     *  never fires). Records with no railRef are excluded — there is nothing to cancel. */
+    const priorBooked: { itemId: string; railRef: string }[] = [];
 
     const unwind = async (
       error: string,
       booked: { itemId: string; railRef: string }[],
       remainingHolds: { itemId: string; holdRef: string }[],
     ): Promise<StagedResult> => {
-      const { compensations, failedCompensations } = await this.compensateBooked(manifest.tripId, booked, ctx.now, actor);
+      // Compensate this run's commits AND anything already live from an earlier run (CRITICAL 2).
+      // `committedOrder` still reports only what THIS run committed — its documented meaning.
+      const toCompensate = [...priorBooked, ...booked];
+      const { compensations, failedCompensations } = await this.compensateBooked(manifest.tripId, toCompensate, ctx.now, actor);
       const releasedHolds = await this.releaseHolds(manifest.tripId, remainingHolds, ctx.now, actor);
       return { tripId: manifest.tripId, state: "FAILED", results, committedOrder: booked.map((b) => b.itemId), compensations, failedCompensations, releasedHolds, error };
     };
@@ -308,6 +317,7 @@ export class Orchestrator {
       const done = priorConfirmed.get(itemId);
       if (done) {
         settled.push({ category, priceCents: done.amountCents });
+        if (done.railRef) priorBooked.push({ itemId, railRef: done.railRef });
         results.push({ itemId, status: "confirmed", confirmationCode: done.confirmationCode, error: null });
         continue;
       }
@@ -339,6 +349,7 @@ export class Orchestrator {
           await this.store.put(rec);
           await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "reconciled", rail: this.rail.railId, externalRef: found.railRef, amountCents: found.amountCents, detail: "adopted an in-flight booking confirmed by the rail" });
           settled.push({ category, priceCents: found.amountCents });
+          if (found.railRef) priorBooked.push({ itemId, railRef: found.railRef });
           results.push({ itemId, status: "confirmed", confirmationCode: found.confirmationCode, error: null });
           continue;
         }
@@ -440,9 +451,22 @@ export class Orchestrator {
         results.push({ itemId: h.itemId, status: "confirmed", confirmationCode: bookedRes.confirmationCode, error: null });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        const rec: BookingRecord = { id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: msg };
-        await this.store.put(rec);
-        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book_failed", rail: this.rail.railId, externalRef: null, amountCents: 0, detail: msg });
+        // MONEY-SAFETY (2c review, CRITICAL 1): only a DEFINITIVE rejection may be recorded as a
+        // clean `failed`, because `failed` means "safe to retry for real". A timeout / 5xx / socket
+        // hang-up is AMBIGUOUS — the supplier may have committed and only the response was lost —
+        // and flattening that to `failed` erased the in-flight marker written moments ago, so the
+        // retry re-booked and double-charged. The ambiguous case now LEAVES the marker intact
+        // (status "held", railRef null, holdRef set) so the next run reconciles instead of guessing.
+        const definitive = e instanceof RailRejectedError;
+        if (definitive) {
+          const rec: BookingRecord = { id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: 0, error: msg };
+          await this.store.put(rec);
+        } else {
+          // Keep the marker, annotate it. Do NOT clear holdRef — it is the only reconcile handle.
+          const rec: BookingRecord = { id, tripId: manifest.tripId, itemId: h.itemId, rail: this.rail.railId, status: "held", railRef: null, confirmationCode: null, amountCents: h.priceCents, error: msg, holdRef: h.holdRef };
+          await this.store.put(rec);
+        }
+        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId: h.itemId, actor, action: "book_failed", rail: this.rail.railId, externalRef: definitive ? null : h.holdRef, amountCents: 0, detail: definitive ? msg : `${msg} (AMBIGUOUS — booking may exist; left in-flight for reconciliation)` });
         results.push({ itemId: h.itemId, status: "failed", confirmationCode: null, error: msg });
         return unwind(msg, booked, uncommitted);
       }
