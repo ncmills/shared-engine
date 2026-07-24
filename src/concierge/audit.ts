@@ -5,7 +5,18 @@ export interface AuditEntry {
   tripId: string;
   itemId: string | null;
   actor: string; // e.g. "orchestrator"
-  action: "hold" | "hold_failed" | "book" | "book_failed" | "compensate" | "compensate_failed" | "release" | "release_failed";
+  action:
+    | "hold"
+    | "hold_failed"
+    /** Phase 2c: the hold SUCCEEDED but locked a price above the quote beyond tolerance, so the trip
+     *  was aborted and the hold released. Distinct from `hold_failed` (the rail refused the hold). */
+    | "price_drift_rejected"
+    | "book"
+    | "book_failed"
+    | "compensate"
+    | "compensate_failed"
+    | "release"
+    | "release_failed";
   rail: string;
   externalRef: string | null; // holdRef / railRef
   amountCents: number;

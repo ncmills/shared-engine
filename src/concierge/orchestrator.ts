@@ -3,6 +3,7 @@ import type { BookingManifest, BookingRecord, BookingResult, BookingCategory } f
 import { bookingRecordId } from "./types";
 import { InMemoryAuditLog, type AuditLog } from "./audit";
 import { checkSpendCaps, type SpendCaps } from "./caps";
+import { checkPriceDrift, type PriceDriftOpts } from "./price-drift";
 
 export interface BookingStore {
   get(id: string): Promise<BookingRecord | null>;
@@ -62,6 +63,10 @@ export interface StagedCtx {
   lead: { leadName: string; leadEmail: string };
   now: string; // ISO8601
   caps?: SpendCaps;
+  /** Phase 2c. Upward drift allowed between the price QUOTED at search and the price LOCKED at
+   *  hold/prebook, per item. Omitted = zero tolerance: any upward drift aborts the trip. Strict by
+   *  default is deliberate — we must never silently charge more than we showed. */
+  driftTolerance?: PriceDriftOpts;
   actor?: string;
 }
 
@@ -295,7 +300,23 @@ export class Orchestrator {
       // search quote — a two-price rail that drifts UP at hold time must be caught by the cap.
       const lockedCents = hold.slot.priceCents;
       await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "hold", rail: this.rail.railId, externalRef: hold.holdRef, amountCents: lockedCents });
+      // Push BEFORE the drift gate: this hold is live on the rail now, so it has to be in `held` or
+      // the unwind below would release every hold EXCEPT the one that just failed — leaking a paid
+      // prebook on every drift abort.
       held.push({ itemId, category, railSlotId: item.chosen.railSlotId, holdRef: hold.holdRef, expiresAt: hold.expiresAt, priceCents: lockedCents });
+
+      // PHASE 2c MONEY-SAFETY: per-item drift gate. The cap gate is an aggregate check, so it only
+      // catches drift big enough to breach a cap — and catches nothing at all when no caps are set.
+      // A guest quoted 8,500 must never be committed at 9,900 just because the total stayed under
+      // budget. Cheaper-than-quoted always passes; see checkPriceDrift.
+      const driftError = checkPriceDrift(item.chosen.priceCents, lockedCents, ctx.driftTolerance);
+      if (driftError) {
+        const id = bookingRecordId(manifest.tripId, itemId, this.rail.railId);
+        await this.store.put({ id, tripId: manifest.tripId, itemId, rail: this.rail.railId, status: "failed", railRef: null, confirmationCode: null, amountCents: lockedCents, error: driftError });
+        await this.audit.append({ ts: ctx.now, tripId: manifest.tripId, itemId, actor, action: "price_drift_rejected", rail: this.rail.railId, externalRef: hold.holdRef, amountCents: lockedCents, detail: driftError });
+        results.push({ itemId, status: "failed", confirmationCode: null, error: driftError });
+        return unwind(`item ${itemId}: ${driftError}`, [], held.map((h) => ({ itemId: h.itemId, holdRef: h.holdRef })));
+      }
     }
 
     // --- PENDING_CONFIRM: assemble priced trip + spend caps ---

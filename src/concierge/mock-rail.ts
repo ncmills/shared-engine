@@ -24,6 +24,10 @@ export interface MockRailOpts {
   failReleaseFor?: string[];
   /** >0 makes this a paid (activity-style) rail with a refundable policy. */
   priceCents?: number;
+  /** Price LOCKED at hold time when it differs from the search quote — makes MockRail a two-price
+   *  rail like LiteAPI's prebook. Defaults to `priceCents` (single-price, the historical behaviour).
+   *  Exists so drift can be exercised without standing up the LiteAPI sandbox. */
+  holdPriceCents?: number;
   /** Override the hold expiry; a past ISO simulates an already-expired hold. */
   holdExpiresAt?: string;
   /** Per-slot hold expiry override (wins over holdExpiresAt) — lets tests set distinct TTLs. */
@@ -72,7 +76,7 @@ export class MockRail implements BookingRail {
       slot: {
         railSlotId,
         label: railSlotId,
-        priceCents: this.opts.priceCents ?? 0,
+        priceCents: this.opts.holdPriceCents ?? this.opts.priceCents ?? 0,
         startsAt: ctx.dateTime,
         cancellation: this.policy(),
       },

@@ -43,10 +43,15 @@ const resolve = (rail: BookingRail, intents: BookingIntent[]) =>
 describe("executeStaged over a two-price rail (Phase 2b review fixes)", () => {
   it("cap gate catches the LOCKED (drifted-up) hold price, not the cheaper search quote", async () => {
     // Searched at $450 (under the $500 cap), but the prebook LOCKS $600 (over the cap).
+    //
+    // Phase 2c note: the per-item drift gate now runs DURING the hold loop and would abort this trip
+    // before the cap gate is reached. This test is specifically about the cap gate reading the locked
+    // price, so it grants a drift tolerance wide enough to let the drift through — leaving the cap as
+    // the thing under test. Drift enforcement itself is covered in concierge-staged-drift.test.ts.
     const rail = new TwoPriceRail({ searchCents: 45000, holdCentsBySlot: { Nashville: 60000 } });
     const audit = new InMemoryAuditLog();
     const manifest = await resolve(rail, [intent("stay-1", "Nashville")]);
-    const staged = await new Orchestrator(rail, new InMemoryBookingStore(), audit).executeStaged(manifest, { lead, now, caps: { totalCapCents: 50000 } });
+    const staged = await new Orchestrator(rail, new InMemoryBookingStore(), audit).executeStaged(manifest, { lead, now, caps: { totalCapCents: 50000 }, driftTolerance: { toleranceCents: 20000 } });
     expect(staged.state).toBe("FAILED");
     expect(staged.error).toMatch(/cap/i);
     expect(staged.results.some((r) => r.status === "confirmed")).toBe(false);
