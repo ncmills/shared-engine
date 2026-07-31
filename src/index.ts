@@ -5,6 +5,7 @@ export * from './brand-config';
 export * from './pricing';
 export * from './stats';
 export * from './trip-terms-validator';
+export * from './voice-validator';
 export * from './analytics';
 export * from './priors';
 export * from './surprise-me';
