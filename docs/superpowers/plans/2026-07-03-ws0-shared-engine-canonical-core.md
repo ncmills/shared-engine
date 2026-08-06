@@ -65,35 +65,38 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Extend Brand, BrandId, and brand configs
+### Task 2: Extend the signal Brand tag
+
+**Scope note (narrowed 2026-07-03, Nick):** `BrandConfig`/`BrandId`/`configForBrand` are wedding-wizard plan-generation concepts (`scoreField: 'bachelorScore' | 'bacheloretteScore'`, `honoreeTerm`, etc.) — they have no honest `offsite`/`handicaphq` member and the data-collection regime does not use them. This task ONLY widens the signal `Brand` tag. Do NOT touch `types.ts`, `brand-config.ts`, or `configForBrand`. If a later workstream converges plan-generation and genuinely needs brand configs, it adds them then with real content.
 
 **Files:**
 - Modify: `~/shared-engine/src/signals.ts:32` (`Brand` type)
-- Modify: `~/shared-engine/src/types.ts:1` (`BrandId` type)
-- Modify: `~/shared-engine/src/brand-config.ts` (add configs + `configForBrand`)
 - Test: `~/shared-engine/src/__tests__/brands.test.ts`
 
 **Interfaces:**
-- Consumes: existing `BrandConfig` interface (`brand-config.ts:3`), `BESTMAN_CONFIG`, `MOH_CONFIG`.
-- Produces: `Brand` widened to `"moh" | "bestman" | "tdf" | "offsite" | "handicaphq"`; `BrandId` widened to `'bestman' | 'moh' | 'offsite' | 'handicaphq'`; new `OFFSITE_CONFIG`, `HANDICAPHQ_CONFIG`; `configForBrand(brandId)` handles all four live brands.
+- Consumes: existing `SignalPayload` interface (`signals.ts:54`), which is typed on `Brand`.
+- Produces: `Brand` widened to `"moh" | "bestman" | "tdf" | "offsite" | "handicaphq"`. Everything already generic over `Brand` (`logSelection`, `logBookmark`, `logAcquisition`, `SignalPayload`) now accepts the two new brands with no other change.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 // src/__tests__/brands.test.ts
 import { describe, it, expect } from "vitest";
-import { configForBrand } from "../brand-config";
-import type { Brand } from "../signals";
+import { logSelection, type Brand, type SignalPayload } from "../signals";
 
-describe("brand extension", () => {
-  it("returns a config for each live brand", () => {
-    (["bestman", "moh", "offsite", "handicaphq"] as const).forEach((b) => {
-      expect(configForBrand(b).brandId).toBe(b);
-    });
-  });
-  it("accepts new signal brands at the type level", () => {
+describe("Brand tag extension", () => {
+  it("accepts all five brand tags at the type level", () => {
     const brands: Brand[] = ["moh", "bestman", "tdf", "offsite", "handicaphq"];
     expect(brands).toHaveLength(5);
+  });
+  it("accepts a SignalPayload branded offsite/handicaphq", () => {
+    const a: SignalPayload = { brand: "offsite" };
+    const b: SignalPayload = { brand: "handicaphq" };
+    expect([a.brand, b.brand]).toEqual(["offsite", "handicaphq"]);
+  });
+  it("logSelection is callable with the new brands (no throw, fire-and-forget)", () => {
+    expect(() => logSelection("offsite", { slot: "vibe", action: "add" })).not.toThrow();
+    expect(() => logSelection("handicaphq", { slot: "course", action: "add" })).not.toThrow();
   });
 });
 ```
@@ -101,43 +104,25 @@ describe("brand extension", () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd ~/shared-engine && npx vitest run src/__tests__/brands.test.ts`
-Expected: FAIL — `configForBrand` rejects `'offsite'`/`'handicaphq'` (type + runtime).
+Expected: FAIL — TypeScript rejects `"offsite"`/`"handicaphq"` as `Brand` (type error at the `SignalPayload` literals / `logSelection` args).
 
-- [ ] **Step 3: Widen the types**
+- [ ] **Step 3: Widen the Brand type**
 
-In `src/signals.ts:32`:
+In `src/signals.ts:32`, replace:
 ```ts
 export type Brand = "moh" | "bestman" | "tdf" | "offsite" | "handicaphq";
 ```
-In `src/types.ts:1`:
-```ts
-export type BrandId = 'bestman' | 'moh' | 'offsite' | 'handicaphq';
-```
 
-- [ ] **Step 4: Add the two configs + widen the resolver**
-
-In `src/brand-config.ts`, after `MOH_CONFIG`, add `OFFSITE_CONFIG` and `HANDICAPHQ_CONFIG` mirroring the `BrandConfig` shape (`brandId`, plus the same fields `BESTMAN_CONFIG`/`MOH_CONFIG` set — copy the MOH config as the template and change `brandId` + brand-specific copy/labels; OO = large-group retreats/outings, HHQ = golf trips). Replace `configForBrand` (`:114`):
-```ts
-export function configForBrand(brandId: BrandId): BrandConfig {
-  switch (brandId) {
-    case 'bestman':    return BESTMAN_CONFIG;
-    case 'moh':        return MOH_CONFIG;
-    case 'offsite':    return OFFSITE_CONFIG;
-    case 'handicaphq': return HANDICAPHQ_CONFIG;
-  }
-}
-```
-
-- [ ] **Step 5: Run to verify it passes**
+- [ ] **Step 4: Run to verify it passes**
 
 Run: `cd ~/shared-engine && npx vitest run src/__tests__/brands.test.ts && npm run typecheck`
 Expected: PASS + typecheck clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-cd ~/shared-engine && git add src/signals.ts src/types.ts src/brand-config.ts src/__tests__/brands.test.ts
-git commit -m "feat: add offsite + handicaphq brands to shared-engine
+cd ~/shared-engine && git add src/signals.ts src/__tests__/brands.test.ts
+git commit -m "feat: add offsite + handicaphq signal brand tags to shared-engine
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -240,13 +225,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Modify: `~/shared-engine/src/index.ts` (export both)
 - Test: `~/shared-engine/src/__tests__/popularity.test.ts`
 
+**Fidelity note (revised 2026-07-03 after reading HHQ kv.ts):** the shared module must be a **lossless superset** of HHQ's implementation — preserve the `region:`/`budget:`/`tier:` sub-counters (as optional, brand-generic breakdown params — NOT HHQ's `WizardState`) and the 5-min `popularity:cache` layer. Deliberate simplification vs HHQ: use sequential `hget` in the cache-rebuild loop instead of HHQ's `pipeline()` — identical data, and the cache means the rebuild runs at most once per 5 min, so `RedisLike` stays small (no pipeline builder to fake in tests).
+
 **Interfaces:**
 - Consumes: `RedisLike` (defined here).
 - Produces:
-  - `interface RedisLike { hincrby(key: string, field: string, n: number): Promise<unknown>; hget(key: string, field: string): Promise<string | null>; scan(cursor: string, ...args: (string|number)[]): Promise<[string, string[]]>; expire(key: string, s: number): Promise<unknown>; }`
-  - `recordDestinationView(redis: RedisLike, destinationId: string): Promise<void>`
-  - `recordDestinationSelect(redis: RedisLike, destinationId: string): Promise<void>`
-  - `getAllPopularityScores(redis: RedisLike): Promise<{ scores: Map<string, number>; viewCounts: Map<string, number> }>`
+  - `interface RedisLike { hincrby(key: string, field: string, n: number): Promise<unknown>; hget(key: string, field: string): Promise<string | null>; scan(cursor: string, ...args: (string|number)[]): Promise<[string, string[]]>; expire(key: string, s: number): Promise<unknown>; get(key: string): Promise<string | null>; set(key: string, value: string, ...args: (string|number)[]): Promise<unknown>; }` — `get`/`set` are required (the cache uses them); name the barrel export to avoid colliding with the pre-existing `RedisLike` in `src/room/slug.ts` (e.g. keep `RedisLike` inside `popularity.ts`/`redis-like.ts` and alias at the barrel).
+  - `recordDestinationView(redis: RedisLike, destinationId: string, breakdown?: { region?: string; budget?: string }): Promise<void>` — always `hincrby(total)`; adds `region:${region}` / `budget:${budget}` when provided. Keys `signal:views:${id}`; `expire(key, SIGNAL_TTL)`.
+  - `recordDestinationSelect(redis: RedisLike, destinationId: string, breakdown?: { tier?: string }): Promise<void>` — always `hincrby(total)`; adds `tier:${tier}` when provided. Keys `signal:selects:${id}`.
+  - `getAllPopularityScores(redis: RedisLike): Promise<{ scores: Map<string, number>; viewCounts: Map<string, number> }>` — reads `popularity:cache` (5-min TTL) first; on miss, SCAN `signal:views:*` + sequential `hget` of `total` on views+selects, `score = selects/views` when `views > 0`, then writes the cache (non-blocking). Matches HHQ math byte-for-byte.
   - `popularityBonus(scores: Map<string, number>, destinationId: string, cap?: number): number` (capped ranking nudge; default cap 10, matching HHQ `query.ts` `+10`)
 
 - [ ] **Step 1: Write the failing test**
@@ -420,11 +407,17 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Test: `~/shared-engine/src/__tests__/email-scheduler.test.ts`
 
 **Interfaces:**
+**Fidelity + safety notes (revised 2026-07-03 after review of the real schema):**
+- Real `wp_email_schedule` columns are `email, brand, sequence_step, send_at` (+ `sent_at/skipped_at/...`). There is NO `template` or `vid` column — template is resolved from `sequence_step` by the cron; `vid` is not stored here. Keep `template`/`vid` on the TS interfaces (caller ergonomics) but do NOT persist them. Map `step → sequence_step`.
+- **`step` is 1-based** — the DB enforces `CHECK (sequence_step BETWEEN 1 AND 10)`, and all three real producers use 1-based steps (HHQ/MOH `idx+1`, BMHQ explicit `1..5`). The `WelcomeEmail.step` contract, the pure builder's echoed `step`, and the test fixtures are all 1-based. `scheduleWelcomeSequence` MUST reject/throw on a `step` outside `1..10` before hitting the DB (a Postgres CHECK violation rejects the WHOLE upsert batch).
+- **No silent failure** (Nick hard rule): `scheduleWelcomeSequence` returns `Promise<{ scheduled: number }>` and MUST surface an insert error (throw, or return an `error`) — do NOT swallow the Supabase error into a bare `console.warn`. Preserve HHQ's idempotent upsert (`onConflict "email,brand,sequence_step"`, `ignoreDuplicates`) + email validation.
+- **WS4 dependency (document in the module):** the live `wp_email_schedule`/`wp_leads` brand `CHECK` currently allows only `('moh','bestman','tdf')`. `offsite`/`handicaphq` inserts will be rejected until WS4 widens the constraint. Add a doc-comment noting this so the WS1/WS2 wiring knows the ordering.
+
 - Consumes: injected `SupabaseClient`, `Brand`.
 - Produces:
-  - `interface WelcomeEmail { step: number; sendAtOffsetHours: number; template: string; }`
-  - `buildWelcomeSchedule(sequence: WelcomeEmail[], startIso: string): { send_at: string; step: number; template: string }[]` (pure — computes send_at from offsets)
-  - `scheduleWelcomeSequence(supabase: SupabaseClient, args: { brand: Brand; email: string; vid?: string; sequence: WelcomeEmail[]; nowIso: string }): Promise<void>` (inserts into `wp_email_schedule`)
+  - `interface WelcomeEmail { step: number; /* 1-based, 1..10 */ sendAtOffsetHours: number; template: string; }`
+  - `buildWelcomeSchedule(sequence: WelcomeEmail[], startIso: string): { send_at: string; step: number; template: string }[]` (pure — computes send_at from offsets; echoes 1-based `step`)
+  - `scheduleWelcomeSequence(supabase: SupabaseClient, args: { brand: Brand; email: string; vid?: string; sequence: WelcomeEmail[]; nowIso: string }): Promise<{ scheduled: number }>` (upserts into `wp_email_schedule`, `step→sequence_step`; throws on out-of-range step or Supabase error)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -434,14 +427,15 @@ import { describe, it, expect } from "vitest";
 import { buildWelcomeSchedule } from "../email-scheduler";
 
 describe("email-scheduler", () => {
-  it("computes send_at from hour offsets", () => {
+  it("computes send_at from hour offsets and echoes 1-based step", () => {
     const rows = buildWelcomeSchedule(
-      [{ step: 0, sendAtOffsetHours: 0, template: "welcome" }, { step: 1, sendAtOffsetHours: 24, template: "tips" }],
+      [{ step: 1, sendAtOffsetHours: 0, template: "welcome" }, { step: 2, sendAtOffsetHours: 24, template: "tips" }],
       "2026-07-03T00:00:00.000Z"
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0].send_at).toBe("2026-07-03T00:00:00.000Z");
-    expect(rows[1].send_at).toBe("2026-07-04T00:00:00.000Z");
+    expect(rows[0]!.send_at).toBe("2026-07-03T00:00:00.000Z");
+    expect(rows[0]!.step).toBe(1);
+    expect(rows[1]!.send_at).toBe("2026-07-04T00:00:00.000Z");
   });
 });
 ```
@@ -479,13 +473,18 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `~/shared-engine/src/acquisition-beacon.tsx`
-- Reference (canonical source): `~/handicap-hq/src/components/AcquisitionBeacon.tsx:44`
+- Modify: `~/shared-engine/tsconfig.json` (add `"jsx": "react-jsx"` + DOM lib — this is shared-engine's first `.tsx`)
+- Reference (canonical source): `~/handicap-hq/src/components/AcquisitionBeacon.tsx`
 - Modify: `~/shared-engine/src/index.ts`
 - Test: `~/shared-engine/src/__tests__/acquisition-beacon.test.ts`
 
+**tsconfig enablement (do first):** shared-engine's tsconfig has no `jsx`/DOM lib (it was pure `.ts`). Add `"jsx": "react-jsx"` and a `"lib"` including `"DOM"`/`"DOM.Iterable"` (e.g. `["ES2022","DOM","DOM.Iterable"]`) to `compilerOptions`. Consumers (Next apps) already have these; this is only for shared-engine's own `npm run typecheck`/vitest. **Regression gate:** after the tsconfig change, `npm test` (all existing tests) + `npm run typecheck` MUST still pass. If adding DOM lib cascades type errors across existing modules, STOP, revert the component, ship ONLY the pure `parseAcquisition` helper (a plain `.ts` file, no jsx needed), and report DONE_WITH_CONCERNS — the site-local wrapper stays site-side in WS1.
+
 **Interfaces:**
 - Consumes: `logAcquisition(brand, data)` from `signals.ts`; `Brand`.
-- Produces: `AcquisitionBeacon({ brand }: { brand: Brand }): null` — a `"use client"` component that fires `logAcquisition` exactly once on mount (guarded by a ref + a per-vid sessionStorage key) and renders `null`. Also `parseAcquisition(searchParams: URLSearchParams, referrer: string, ua: string): { source: string; medium?: string; campaign?: string; device: string }` — the pure extraction helper.
+- Produces:
+  - `parseAcquisition(searchParams: URLSearchParams, referrer: string, ua: string): { source: string; medium?: string; campaign?: string; device: "mobile" | "desktop" }` — the PURE extraction helper (this is the real shared logic; utm_* wins over referrer host; `device = /Mobi|Android|iPhone|iPad|iPod/i.test(ua) ? "mobile" : "desktop"` (HHQ's canonical regex — catches iPad/iPod/generic Mobi; do NOT narrow it)).
+  - `AcquisitionBeacon({ brand }: { brand: Brand }): null` — a `"use client"` component that fires `logAcquisition` **once per browser session** (guarded by a `sessionStorage` flag, matching HHQ's `ACQ_SENT_KEY`) inside a `useEffect`, and renders `null`. Keep the `logAcquisition` payload shape identical to HHQ's (`{ ref, utm, device, ... }`) — port it faithfully; if HHQ logs fields `parseAcquisition` doesn't return, extend `parseAcquisition` rather than dropping them.
 
 - [ ] **Step 1: Write the failing test (pure helper only)**
 
@@ -578,10 +577,10 @@ git push -u origin spec/portfolio-data-collection-unification
 
 ## Self-Review
 
-**Spec coverage (WS0 items from §6):** promote 6 modules ✓ (signals/stripPII T3, priors + priors-builder T5, popularity T4, lead-capture — *note: `lead-profile.ts` already lives in shared-engine per `index.ts`; no lift needed, WS1/WS2 import it directly*, email-scheduler T6, acquisition T7); extend Brand ✓ (T2); canonicalize stripPII ✓ (T3); parameterize brand config ✓ (T2 + DI params in T4–T6); lift HHQ popularity + BM priors-builder ✓ (T4/T5); version bump ✓ (T8); typecheck+test gate ✓ (T8). Analytics canonical PostHog (`analytics.ts`) already in shared-engine — consumers import in later WS; no WS0 task needed.
+**Spec coverage (WS0 items from §6):** promote 6 modules ✓ (signals/stripPII T3, priors + priors-builder T5, popularity T4, lead-capture — *note: `lead-profile.ts` already lives in shared-engine per `index.ts`; no lift needed, WS1/WS2 import it directly*, email-scheduler T6, acquisition T7); extend Brand ✓ (T2, signal tag only); canonicalize stripPII ✓ (T3); parameterize brand-specific behavior ✓ (via DI `brand`/`fields`/`sequence` params in T4–T6 — *not* via `BrandConfig`, which stays wedding-wizard-only per the Task 2 scope note); lift HHQ popularity + BM priors-builder ✓ (T4/T5); version bump ✓ (T8); typecheck+test gate ✓ (T8). Analytics canonical PostHog (`analytics.ts`) already in shared-engine — consumers import in later WS; no WS0 task needed.
 
 **Placeholder scan:** Port tasks (T4/T5/T6/T7) reference an exact canonical source path + line range and enumerate the specific adaptations (DI client param, brand param, key namespacing); the transformation is fully specified and the target signatures are given in the Interfaces block. Full code is inline for all new pure logic and every test. No "TBD/handle-edge-cases" placeholders.
 
-**Type consistency:** `RedisLike` defined in T4, consumed by name in T5. `Brand` widened in T2, used in T4–T7. `Overlay`/`BuildPriorsOptions`/`BuildPriorsResult` defined in T5 Interfaces. `overlayRedisKey` takes `brand` in T5 (namespaced) — consumers in WS1–WS3 must pass brand. `configForBrand` switch is exhaustive over the widened `BrandId`.
+**Type consistency:** `RedisLike` defined in T4, consumed by name in T5. `Brand` widened in T2, used in T4–T7. `Overlay`/`BuildPriorsOptions`/`BuildPriorsResult` defined in T5 Interfaces. `overlayRedisKey` takes `brand` in T5 (namespaced) — consumers in WS1–WS3 must pass brand. `BrandId`/`configForBrand` are intentionally untouched (see Task 2 scope note).
 
 **Open follow-ups handed to later workstreams (not WS0):** the `github:` dep-pin cutover (WS1–WS3 pin to the branch, then a final merge-to-main task in the last workstream); the `tdf`→`handicaphq` DB backfill (WS2/WS4); consumer rewiring + emit instrumentation (WS1/WS2).

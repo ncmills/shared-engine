@@ -86,12 +86,14 @@
 **Files:** Modify `src/app/api/generate/route.ts` (after `const input = coerceInput(body)` ~`:143` and after `generatePlans` ~`:148`).
 
 **Interfaces:**
-- Consumes: shared-engine `logSignal` (or the server emit path). OO's `signals-server.ts:logSignalServer(req, table, payload)` exists but has zero callers — prefer wiring THAT (it already resolves session id + writes wp_* via supabase), repointed to shared-engine's `stripPII`. Payload table = `plan_inputs`; payload = `{ brand: "offsite", vid, wizardState: <full PlanInput>, productType, planId?, ... }`.
+- Consumes: OO's `signals-server.ts:logSignalServer(req: Request, table: SignalTable, payload: SignalPayload): void` (already exists at `signals-server.ts:46`, brand hardcoded `"offsite"`, scrubs via shared `stripPII`, writes `wp_*`, fire-and-forget) — it has ZERO callers today; this task adds the one call. Table = `plan_inputs`; payload = `{ brand: "offsite", wizardState: <full PlanInput>, productType, planId? }`.
+- **PII (verified against real code):** `PlanInput` (`src/lib/engine/generate.ts:33`) has `organizerEmail?` — which IS in shared-engine's `stripPII` banned set, so `stripPII`'s object recursion strips it from `wizardState`. `notifyEmail` is coerced SEPARATELY (`route.ts:28 coerceNotifyEmail`, local var) and is NOT part of `input` — it never reaches the emit. So no email leak; the test asserts `organizerEmail` scrubbed, not `notifyEmail`.
+- Emit point: after `const primaryId = planIds[0]` (~`route.ts:163`), where both `input` and `primaryId` are in scope. The POST handler param is named `request`.
 
-- [ ] **Step 1: Write the failing test.** Add a unit/integration test asserting that generating a plan emits a `plan_inputs` signal carrying the full `PlanInput` (mock the supabase insert; assert the row's `payload.wizardState` deep-equals the input and that `stripPII` removed `notifyEmail`/organizer fields, `vid` preserved). Place under OO's test dir (mirror an existing signals test if present).
-- [ ] **Step 2:** Run → RED (route emits nothing today).
-- [ ] **Step 3:** In `generate/route.ts`, after the plan is generated, call `logSignalServer(req, "plan_inputs", { brand: "offsite", wizardState: input, productType: input.productType, planId })` (fire-and-forget; never await in a way that blocks the response; swallow errors internally). Use the vid from the request cookie.
-- [ ] **Step 4:** Run → GREEN. `npx tsc --noEmit` clean.
+- [ ] **Step 1: Write the failing test.** Goal: prove the route now EMITS `plan_inputs` with the full wizard state (the actual gap — it emits nothing today). Preferred approach: `vi.mock` the heavy route deps (`@/lib/image-service`, `@/lib/kv`, `@/lib/email`) and SPY on `@/lib/signals-server` `logSignalServer`; invoke the route's `POST` with a fake `Request` carrying a valid outing/retreat body; assert `logSignalServer` was called once with `("plan_inputs", objectContaining({ wizardState: <the coerced input>, productType }))`. If invoking the full `POST` is too entangled with route internals, extract a thin `emitPlanInputs(request, input, planId)` in the route/signals-server and unit-test that instead (assert it calls `logSignalServer` with the right table+payload). Place the test next to `src/lib/engine/generate.test.ts` conventions. (OO runs tests via `npx vitest run <file>` — there is no bare `"test"` script, only `"taste"`.)
+- [ ] **Step 2:** Run `npx vitest run <testfile>` → RED (route emits nothing today / helper doesn't exist).
+- [ ] **Step 3:** In `generate/route.ts`, after `const primaryId = planIds[0]`, call `logSignalServer(request, "plan_inputs", { brand: "offsite", wizardState: input, productType: input.productType, planId: primaryId ?? undefined })`. It is already fire-and-forget (void, never throws) — do NOT await it, place it so it never delays the response.
+- [ ] **Step 4:** Run → GREEN. `npx tsc --noEmit` clean (pre-existing `.next` generated-types error acceptable).
 - [ ] **Step 5:** Commit: `feat: emit plan_inputs signal on OO plan generation (WS1a)`.
 
 **Verification:** test green; manual generate (dev server) writes a `wp_plan_inputs` row with brand `offsite` and full `wizardState` (query Supabase or assert via mock).
@@ -127,19 +129,21 @@
 
 ---
 
-### Task 8: SurpriseMeButton + `/api/surprise-me` + `surprise_me_actions` emit
+### Task 8: `surprise_me_actions` emit on the existing "Fill it for me" flow
 
-**Files:** Create `src/app/api/surprise-me/route.ts`; add a `SurpriseMeButton` mount in `OutingWizard.tsx:220-226` and `RetreatWizard.tsx:174-180` (the `step===0` block, alongside/!replacing the existing "Fill it for me" `handleRandomFill`).
+**Approach (revised after reading OO):** OO already has a "Fill it for me" button → `handleRandomFill()` (`OutingWizard.tsx:157`, calls `randomOutingFill()`; `RetreatWizard.tsx` has the analog `handleRandomFill`/`randomRetreatFill`). Do NOT add a redundant `SurpriseMeButton` or a `/api/surprise-me` route. Instead INSTRUMENT the existing fill to emit `surprise_me_actions` — this is the minimal, non-duplicative capture. WS1d can later swap `randomOutingFill` for a priors-backed suggester behind the same emit.
+
+**Files:** Modify `src/components/wizard/OutingWizard.tsx` (`handleRandomFill` ~`:157`) and `src/components/wizard/RetreatWizard.tsx` (its `handleRandomFill`).
 
 **Interfaces:**
-- Consumes: OO's SITE-LOCAL `oo-engine/surprise-me.ts` (`surpriseAllFields`) — NOT shared-engine's (shared `surprise-me` uses `priorsForBrand` which is BM/MOH-only). shared-engine `logSignal`/`logSelection` for the `surprise_me_actions` emit.
-- Produces: `surprise_me_actions` rows on Surprise-Me use (field, suggested, confidence) — mirror BM `SurpriseMeButton.tsx:51`.
+- Consumes: shared-engine `logSignal("surprise_me_actions", { brand: "offsite", field, suggested })` (import `logSignal` from `shared-engine`; wizards already import `logSelection`). Mirror BM `SurpriseMeButton.tsx:51`'s `{ field, suggested }` shape. `confidence` is OMITTED here (the fill is prior-free; a fabricated confidence would be misleading — WS1d adds real confidence when priors back it).
+- Produces: `surprise_me_actions` rows (one per filled field) on each "Fill it for me" click.
 
-- [ ] **Step 1:** Decide wiring: the existing `handleRandomFill` (client `random-fill.ts`, deliberately prior-free) stays as the fallback; add a `SurpriseMeButton` that calls OO's `surpriseAllFields` (site-local) and, on each suggested field, emits `logSignal("surprise_me_actions", { brand: "offsite", field, suggested, confidence })`. (Priors-backed suggestions come in WS1d; WS1a wires the button + emit with the site-local surprise so the signal starts flowing.)
-- [ ] **Step 2:** Add a minimal `/api/surprise-me` route ONLY if server-side suggestion is needed; otherwise keep it client-side via `surpriseAllFields` + emit. Prefer client-side (no new route) to match `logAcquisition`/`logSelection` fire-and-forget pattern. Document the choice.
-- [ ] **Step 3:** `npx tsc --noEmit` clean. Dev server: click Surprise-Me; confirm fields populate AND `wp_surprise_me_actions` rows (brand `offsite`) appear. Commit: `feat: Surprise-Me action signal in OO wizards (WS1a)`.
+- [ ] **Step 1:** In `handleRandomFill` (both wizards), after computing `const fill = randomOutingFill()` (resp. `randomRetreatFill()`) and BEFORE/AFTER applying the setters, emit one `logSignal("surprise_me_actions", { brand: "offsite", field, suggested: String(value) })` per field in `fill` (e.g. iterate `Object.entries(fill)`). Keep it fire-and-forget (do not await). Do not change the fill/setter behavior itself.
+- [ ] **Step 2:** `npx tsc --noEmit` clean (pre-existing `.next` error acceptable). If a light vitest assertion is feasible without React infra (e.g. extract the emit into a tiny pure `emitFillSignals(fill)` helper and test it calls logSignal per field), add it; otherwise rely on typecheck + code review (note the choice).
+- [ ] **Step 3:** Commit staging both wizard files (+ any helper/test): `feat: surprise_me_actions signal on OO fill (WS1a)`, trailer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`. No `git commit -a`.
 
-**Verification:** surprise_me_actions rows fire on use; wizard still fills.
+**Verification:** clicking "Fill it for me" emits one `surprise_me_actions` row per field (brand `offsite`); the fill still populates the wizard; no new button or route added.
 
 ---
 
