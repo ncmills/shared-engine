@@ -11,7 +11,7 @@
 
 export type BudgetTierKey = "weekendWarrior" | "theLegend" | "theKing";
 export type BudgetItemCategory = "lodging" | "dining" | "bars" | "activities" | "transport" | "tips";
-export type BudgetItemSource = "data" | "claude" | "tier-default" | "clamped";
+export type BudgetItemSource = "data" | "claude" | "tier-default" | "clamped" | "free";
 
 export interface BudgetLineItem {
   category: BudgetItemCategory;
@@ -98,6 +98,17 @@ function detectPriceRange(pr: string | undefined): string | undefined {
  * Clamp a Claude-provided price if it's outside 50-200% of the tier default.
  * Returns the original if within range, or the clamped value.
  */
+/** True when an item was EXPLICITLY priced at $0 — a genuinely free activity
+ *  (record-store browse, a free viewpoint, cook-at-the-rental) — as opposed to
+ *  a missing price. Audit 2026-07-24: the `> 0` gates treated an explicit 0 as
+ *  "not provided" and silently re-billed it at the tier default (a $0 activity
+ *  card showing $0 while $60–115 got baked into the headline). `estimated` is
+ *  the structured field; `parsedPrice` is parseDollarAmount(costPerPerson) (NaN
+ *  when absent, so an unpriced item stays a tier-default, not free). */
+function isExplicitlyFree(estimated: number | undefined, parsedPrice: number): boolean {
+  return estimated === 0 || (typeof estimated !== "number" && parsedPrice === 0);
+}
+
 function clampToTier(
   claudePrice: number,
   tierDefault: number,
@@ -195,7 +206,15 @@ export function computeItemizedBudget(
     const priceSymbol = detectPriceRange(d.priceRange);
     const tierDefault = midpoint(tier.dinner); // default to dinner range
 
-    if (typeof d.estimatedCostPerPerson === "number" && d.estimatedCostPerPerson > 0) {
+    if (isExplicitlyFree(d.estimatedCostPerPerson, NaN)) {
+      // Explicitly free meal (cook-at-the-rental, private-chef-included).
+      items.push({
+        category: "dining",
+        name: d.name,
+        estimatedCostPerPerson: 0,
+        source: "free",
+      });
+    } else if (typeof d.estimatedCostPerPerson === "number" && d.estimatedCostPerPerson > 0) {
       // Claude provided a price — validate against tier
       const { price, clamped } = clampToTier(d.estimatedCostPerPerson, tierDefault);
       items.push({
@@ -252,7 +271,15 @@ export function computeItemizedBudget(
   for (const b of plan.bars ?? []) {
     const tierDefault = midpoint(tier.barNight);
 
-    if (typeof b.estimatedCostPerPerson === "number" && b.estimatedCostPerPerson > 0) {
+    if (isExplicitlyFree(b.estimatedCostPerPerson, NaN)) {
+      // Explicitly free (hotel-bar hang, drinks at the rental).
+      items.push({
+        category: "bars",
+        name: b.name,
+        estimatedCostPerPerson: 0,
+        source: "free",
+      });
+    } else if (typeof b.estimatedCostPerPerson === "number" && b.estimatedCostPerPerson > 0) {
       const { price, clamped } = clampToTier(b.estimatedCostPerPerson, tierDefault);
       items.push({
         category: "bars",
@@ -275,7 +302,14 @@ export function computeItemizedBudget(
     const claudePrice = parseDollarAmount(a.costPerPerson);
     const tierDefault = midpoint(tier.activityDefault);
 
-    if (typeof a.estimatedCostPerPerson === "number" && a.estimatedCostPerPerson > 0) {
+    if (isExplicitlyFree(a.estimatedCostPerPerson, claudePrice)) {
+      items.push({
+        category: "activities",
+        name: a.name,
+        estimatedCostPerPerson: 0,
+        source: "free",
+      });
+    } else if (typeof a.estimatedCostPerPerson === "number" && a.estimatedCostPerPerson > 0) {
       const { price, clamped } = clampToTier(a.estimatedCostPerPerson, tierDefault);
       items.push({
         category: "activities",
